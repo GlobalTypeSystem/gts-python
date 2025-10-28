@@ -42,7 +42,7 @@ pip install -e ./gts
 
 ## Usage
 
-CLI:
+### CLI
 
 ```bash
 gts <command> <args>
@@ -51,10 +51,25 @@ gts <command> <args>
 gts --help
 ```
 
-Library:
+### Library
 
 See [gts/README.md](gts/README.md)
 
+### Web server
+
+The web server is a non-production web-server with REST API for the operations processing and testing.
+
+
+```bash
+# start the web server
+gts serve
+
+# Generate the OpenAPI schema
+curl -s http://127.0.0.1:8000/openapi.json -o ./openapi.json
+
+# See the schema
+curl -s http://127.0.0.1:8000/openapi.json | jq | less -S
+```
 
 ## License
 
