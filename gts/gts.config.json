@@ -1,0 +1,22 @@
+{
+  "entity_id_fields": [
+    "$id",
+    "gtsId",
+    "gtsIid",
+    "gtsOid",
+    "gtsI",
+    "gts_id",
+    "gts_oid",
+    "gts_iid",
+    "id"
+  ],
+  "schema_id_fields": [
+    "$schema",
+    "gtsTid",
+    "gtsT",
+    "gts_t",
+    "gts_tid",
+    "type",
+    "schema"
+  ]
+}
