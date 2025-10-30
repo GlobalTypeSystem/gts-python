@@ -438,6 +438,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "object",
                   "title": "Response Schema Graph Resolve Relationships Get"
                 }
               }
@@ -582,6 +583,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "type": "object",
                   "title": "Response Query Query Get"
                 }
               }
