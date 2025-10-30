@@ -124,7 +124,7 @@ class GtsFileReader(GtsReader):
             self._collect_files()
             self._initialized = True
 
-        logging.info(f"Processing {len(self._files)} files from {self.paths}")
+        logging.debug(f"Processing {len(self._files)} files from {self.paths}")
         for file_path in self._files:
             entities = self._process_file(file_path)
             for entity in entities:
