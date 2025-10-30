@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 import shlex
 import uuid
-from typing import Iterable, List, Optional, Set, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Any
 
 GTS_PREFIX = "gts."
 GTS_NS = uuid.uuid5(uuid.NAMESPACE_URL, "gts")
+GTS_SEGMENT_TOKEN_REGEX = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
 class GtsInvalidSegment(ValueError):
@@ -65,55 +66,96 @@ class GtsIdSegment:
         self._parse_segment_id(num, offset, segment)
 
     def _parse_segment_id(self, num: int, offset: int, segment: str):
-        if segment.endswith("~"):
-            self.is_type = True
-            segment = segment[:-1]
+        if segment.count("~") > 0:
+            if segment.count("~") > 1:
+                raise GtsInvalidSegment(num, offset, segment, "Too many '~' characters")
+            if segment.endswith("~"):
+                self.is_type = True
+                segment = segment[:-1]
+            else:
+                raise GtsInvalidSegment(num, offset, segment, " '~' must be at the end")
+
         tokens = segment.split(".")
+
         if len(tokens) > 6:
             raise GtsInvalidSegment(num, offset, segment, "Too many tokens")
+
+        if not segment.endswith("*"):
+            if len(tokens) < 5:
+                raise GtsInvalidSegment(num, offset, segment, "Too few tokens")
+
+            for t in range(0, 4):
+                if not GTS_SEGMENT_TOKEN_REGEX.match(tokens[t]):
+                    raise GtsInvalidSegment(num, offset, segment, "Invalid segment token: " + tokens[t])
+
         if len(tokens) > 0:
             if tokens[0] == "*":
                 self.is_wildcard = True
                 return
             self.vendor = tokens[0]
+
         if len(tokens) > 1:
             if tokens[1] == "*":
                 self.is_wildcard = True
                 return
             self.package = tokens[1]
+
         if len(tokens) > 2:
             if tokens[2] == "*":
                 self.is_wildcard = True
                 return
             self.namespace = tokens[2]
+
         if len(tokens) > 3:
             if tokens[3] == "*":
                 self.is_wildcard = True
                 return
             self.type = tokens[3]
+
         if len(tokens) > 4:
             if tokens[4] == "*":
                 self.is_wildcard = True
                 return
+
             if not tokens[4].startswith("v"):
                 raise GtsInvalidSegment(num, offset, segment, "Major version must start with 'v'")
             try:
                 self.ver_major = int(tokens[4][1:])
             except ValueError:
                 raise GtsInvalidSegment(num, offset, segment, "Major version must be an integer")
+
+            if self.ver_major < 0:
+                raise GtsInvalidSegment(num, offset, segment, "Major version must be >= 0")
+            if str(self.ver_major) != tokens[4][1:]:
+                raise GtsInvalidSegment(num, offset, segment, "Major version must be an integer")
+
         if len(tokens) > 5:
             if tokens[5] == "*":
                 self.is_wildcard = True
                 return
+
             try:
                 self.ver_minor = int(tokens[5])
             except ValueError:
+                raise GtsInvalidSegment(num, offset, segment, "Minor version must be an integer")
+
+            if self.ver_minor < 0:
+                raise GtsInvalidSegment(num, offset, segment, "Minor version must be >= 0")
+            if str(self.ver_minor) != tokens[5]:
                 raise GtsInvalidSegment(num, offset, segment, "Minor version must be an integer")
 
 
 class GtsID:
     def __init__(self, id: str):
         raw = id.strip()
+
+        # Validate it's lower case
+        if raw != raw.lower():
+            raise GtsInvalidId(id, "Must be lower case")
+
+        if "-" in raw:
+            raise GtsInvalidId(id, "Must not contain '-'")
+
         if not raw.startswith(GTS_PREFIX):
             raise GtsInvalidId(id, f"Does not start with '{GTS_PREFIX}'")
         if len(raw) > 1024:
@@ -165,14 +207,79 @@ class GtsID:
 
     def wildcard_match(self, pattern: GtsWildcard) -> bool:
         p = pattern.id
-        # validated by GtsWildcard constructor
-        candidate = self.id
+
+        # Helper function to match segments with version flexibility
+        def match_segments(pattern_segs: List[GtsIdSegment], candidate_segs: List[GtsIdSegment]) -> bool:
+            # If pattern is longer than candidate, no match
+            if len(pattern_segs) > len(candidate_segs):
+                return False
+
+            for i, p_seg in enumerate(pattern_segs):
+                c_seg = candidate_segs[i]
+
+                # If pattern segment is a wildcard, check non-wildcard fields first
+                if p_seg.is_wildcard:
+                    # Check the fields that are set (non-empty) in the wildcard pattern
+                    if p_seg.vendor and p_seg.vendor != c_seg.vendor:
+                        return False
+                    if p_seg.package and p_seg.package != c_seg.package:
+                        return False
+                    if p_seg.namespace and p_seg.namespace != c_seg.namespace:
+                        return False
+                    if p_seg.type and p_seg.type != c_seg.type:
+                        return False
+                    # Check version fields if they are set in the pattern
+                    if p_seg.ver_major != 0 and p_seg.ver_major != c_seg.ver_major:
+                        return False
+                    if p_seg.ver_minor is not None and p_seg.ver_minor != c_seg.ver_minor:
+                        return False
+                    # Check is_type flag if set
+                    if p_seg.is_type and p_seg.is_type != c_seg.is_type:
+                        return False
+                    # Wildcard matches - accept anything after this point
+                    return True
+
+                # Non-wildcard segment - all fields must match exactly
+                # Check vendor, package, namespace, type match
+                if p_seg.vendor != c_seg.vendor:
+                    return False
+                if p_seg.package != c_seg.package:
+                    return False
+                if p_seg.namespace != c_seg.namespace:
+                    return False
+                if p_seg.type != c_seg.type:
+                    return False
+
+                # Check version matching
+                # Major version must match
+                if p_seg.ver_major != c_seg.ver_major:
+                    return False
+
+                # Minor version: if pattern has no minor version, accept any minor in candidate
+                # If pattern has minor version, it must match exactly
+                if p_seg.ver_minor is not None:
+                    if p_seg.ver_minor != c_seg.ver_minor:
+                        return False
+                # else: pattern has no minor version, so any minor version in candidate is OK
+
+                # Check is_type flag matches
+                if p_seg.is_type != c_seg.is_type:
+                    return False
+
+            # If we've matched all pattern segments, it's a match
+            return True
+
+        # No wildcard case - need exact match with version flexibility
         if '*' not in p:
-            return p.strip() == candidate.strip()
+            # Parse both as segments and compare
+            return match_segments(pattern.gts_id_segments, self.gts_id_segments)
+
+        # Wildcard case
         if p.count('*') > 1 or not p.endswith('*'):
             return False
-        prefix = p[:-1]
-        return candidate.startswith(prefix)
+
+        # Use segment matching for wildcard patterns too
+        return match_segments(pattern.gts_id_segments, self.gts_id_segments)
 
     def parse_query(self, expr: str) -> Tuple[str, Dict[str, str]]:
         base, _, filt = expr.partition("[")
@@ -214,7 +321,9 @@ class GtsWildcard(GtsID):
         p = pattern.strip()
         if not p.startswith(GTS_PREFIX):
             raise GtsInvalidWildcard(pattern, f"Does not start with '{GTS_PREFIX}'")
-        if "*" in p and not p.endswith(".*"):
+        if p.count("*") > 1:
+            raise GtsInvalidWildcard(pattern, "The wildcard '*' token is allowed only once")
+        if "*" in p and not p.endswith(".*") and not p.endswith("~*"):
             raise GtsInvalidWildcard(pattern, "The wildcard '*' token is allowed only at the end of the pattern")
         try:
             super().__init__(p)

@@ -70,6 +70,13 @@ class GtsHttpServer:
         # Population APIs
         app.add_api_route(
             "/entities",
+            self.get_entities,
+            methods=["GET"],
+            summary="Get all entities in the registry",
+            response_class=JSONResponse,
+        )
+        app.add_api_route(
+            "/entities",
             self.add_entity,
             methods=["POST"],
             summary=(
@@ -110,15 +117,15 @@ class GtsHttpServer:
         )
         # Op #3 - parse
         app.add_api_route(
-            "/parse",
+            "/parse-id",
             self.parse,
             methods=["GET"],
             summary="Parse GTS identifier",
         )
         # Op #4 - wildcard match
         app.add_api_route(
-            "/wildcard-match",
-            self.wildcard_match,
+            "/match-id-pattern",
+            self.match_id_pattern,
             methods=["GET"],
             summary=(
                 "Match candidate against wildcard pattern"
@@ -140,7 +147,7 @@ class GtsHttpServer:
         )
         # Op #7 - schema graph / relationships
         app.add_api_route(
-            "/schema-graph",
+            "/resolve-relationships",
             self.schema_graph,
             methods=["GET"],
             summary=(
@@ -178,53 +185,56 @@ class GtsHttpServer:
 
     # Handlers as methods (no free functions)
     async def add_entity(self, body: Dict[str, Any] = Body(...)) -> JSONResponse:
-        return JSONResponse(self.ops.add_entity(body))
+        return JSONResponse(self.ops.add_entity(body).to_dict())
 
     async def add_entities(self, body: List[Dict[str, Any]] = Body(...)) -> JSONResponse:
-        return JSONResponse(self.ops.add_entities(body))
+        return JSONResponse(self.ops.add_entities(body).to_dict())
 
     async def add_schema(self, body: SchemaRegister) -> JSONResponse:
         return JSONResponse(
-            self.ops.add_schema(body.type_id, body.schema_content)
+            self.ops.add_schema(body.type_id, body.schema_content).to_dict()
         )
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
-        return self.ops.validate_id(id)
+        return self.ops.validate_id(id).to_dict()
 
     async def extract_id(self, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-        return self.ops.extract_id(body)
+        return self.ops.extract_id(body).to_dict()
 
     async def parse(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
-        return self.ops.parse(id)
+        return self.ops.parse_id(id).to_dict()
 
-    async def wildcard_match(
+    async def match_id_pattern(
         self,
         candidate: str = Query(...),
         pattern: str = Query(...),
     ) -> Dict[str, Any]:
-        return self.ops.wildcard_match(candidate, pattern)
+        return self.ops.match_id_pattern(candidate, pattern).to_dict()
 
     async def id_to_uuid(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
-        return self.ops.uuid(id)
+        return self.ops.uuid(id).to_dict()
 
     async def validate_instance(self, body: ValidateInstanceRequest) -> Dict[str, Any]:
-        return self.ops.validate_instance(body.gts_id)
+        return self.ops.validate_instance(body.instance_id).to_dict()
 
-    async def schema_graph(self, id: str = Query(..., alias="gts_id")) -> Any:
-        return self.ops.schema_graph(id)
+    async def schema_graph(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
+        return self.ops.schema_graph(id).to_dict()
 
     async def compatibility(
         self,
         old: str = Query(..., alias="old_schema_id"),
         new: str = Query(..., alias="new_schema_id"),
     ) -> Dict[str, Any]:
-        return self.ops.compatibility(old, new)
+        return self.ops.compatibility(old, new).to_dict()
 
     async def cast(self, body: CastRequest) -> Dict[str, Any]:
-        return self.ops.cast(body.instance_id, body.to_schema_id)
+        return self.ops.cast(body.instance_id, body.to_schema_id).to_dict()
 
-    async def query(self, expr: str = Query(...)) -> Any:
-        return self.ops.query(expr)
+    async def query(self, expr: str = Query(...), limit: int = Query(100, ge=1, le=1000)) -> Dict[str, Any]:
+        return self.ops.query(expr, limit=limit).to_dict()
 
     async def attr(self, gts_with_path: str = Query(...)) -> Dict[str, Any]:
-        return self.ops.attr(gts_with_path)
+        return self.ops.attr(gts_with_path).to_dict()
+
+    async def get_entities(self, limit: int = Query(100, ge=1, le=1000)) -> Dict[str, Any]:
+        return self.ops.get_entities(limit=limit).to_dict()

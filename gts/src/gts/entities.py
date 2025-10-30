@@ -121,8 +121,12 @@ class JsonEntity:
         # Calculate IDs if config provided
         if cfg is not None:
             idv = self._calc_json_entity_id(cfg)
-            self.gts_id = (GtsID(idv) if idv and GtsID.is_valid(idv) else None)
             self.schemaId = self._calc_json_schema_id(cfg)
+            # If no valid GTS ID found in entity fields, use schema ID as fallback
+            if not (idv and GtsID.is_valid(idv)):
+                if self.schemaId and GtsID.is_valid(self.schemaId):
+                    idv = self.schemaId
+            self.gts_id = (GtsID(idv) if idv and GtsID.is_valid(idv) else None)
 
         # Set label
         if self.file and self.list_sequence is not None:
@@ -166,87 +170,112 @@ class JsonEntity:
         resolver = JsonPathResolver(self.gts_id.id if self.gts_id else '', self.content)
         return resolver.resolve(path)
 
-    def cast(self, to_schema: JsonEntity) -> JsonEntityCastResult:
+    def cast(self, to_schema: JsonEntity, from_schema: JsonEntity, resolver: Optional[Any] = None) -> JsonEntityCastResult:
         if self.is_schema:
-            raise SchemaCastError("Can't cast schema to schema")
+            # When casting a schema, from_schema might be a standard JSON Schema (no gts_id)
+            # In that case, skip the sanity check
+            if from_schema.gts_id and self.gts_id.id != from_schema.gts_id.id:
+                raise SchemaCastError(f"Internal error: {self.gts_id.id} != {from_schema.gts_id.id}")
         if not to_schema.is_schema:
-            raise SchemaCastError("Can't cast non-schema to schema")
-        return JsonEntityCastResult.cast(self.gts_id.id, to_schema.gts_id.id, self.content, to_schema.content)
+            raise SchemaCastError("Target must be a schema")
+        if not from_schema.is_schema:
+            raise SchemaCastError("Source schema must be a schema")
+        return JsonEntityCastResult.cast(
+            self.gts_id.id,
+            to_schema.gts_id.id,
+            self.content,
+            from_schema.content,
+            to_schema.content,
+            resolver=resolver
+        )
 
-    def _extract_gts_ids_with_paths(self) -> List[Dict[str, str]]:
-        found: List[Dict[str, str]] = []
+    def _walk_and_collect(
+        self,
+        content: Any,
+        collector: List[Dict[str, str]],
+        matcher: Any,  # Callable but avoiding import
+    ) -> None:
+        """Generic tree walker that collects matching nodes.
 
+        Args:
+            content: Content to walk through
+            collector: List to append matches to
+            matcher: Function that takes (node, path) and returns Optional[Dict[str, str]]
+        """
         def walk(node: Any, current_path: str = "") -> None:
             if node is None:
                 return
-            if isinstance(node, str):
-                if GtsID.is_valid(node):
-                    found.append(
-                        {"id": node, "sourcePath": current_path or "root"}
-                    )
-                return
-            if isinstance(node, list):
-                for idx, item in enumerate(node):
-                    walk(item, f"{current_path}[{idx}]")
-                return
+
+            # Try to match current node
+            match_result = matcher(node, current_path)
+            if match_result:
+                collector.append(match_result)
+
+            # Recurse into structures
             if isinstance(node, dict):
                 for k, v in node.items():
                     next_path = f"{current_path}.{k}" if current_path else k
-                    if isinstance(v, str) and GtsID.is_valid(v):
-                        found.append({"id": v, "sourcePath": next_path})
                     walk(v, next_path)
+            elif isinstance(node, list):
+                for idx, item in enumerate(node):
+                    next_path = f"{current_path}[{idx}]"
+                    walk(item, next_path)
 
-        walk(self.content)
+        walk(content)
+
+    def _deduplicate_by_id_and_path(self, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Deduplicate items by their id and sourcePath."""
         uniq: Dict[str, Dict[str, str]] = {}
-        for e in found:
-            uniq[f"{e['id']}|{e['sourcePath']}"] = e
+        for item in items:
+            key = f"{item['id']}|{item['sourcePath']}"
+            uniq[key] = item
         return list(uniq.values())
+
+    def _extract_gts_ids_with_paths(self) -> List[Dict[str, str]]:
+        """Extract all GTS IDs from content with their paths."""
+        found: List[Dict[str, str]] = []
+
+        def gts_id_matcher(node: Any, path: str) -> Optional[Dict[str, str]]:
+            """Match GTS ID strings."""
+            if isinstance(node, str) and GtsID.is_valid(node):
+                return {"id": node, "sourcePath": path or "root"}
+            return None
+
+        self._walk_and_collect(self.content, found, gts_id_matcher)
+        return self._deduplicate_by_id_and_path(found)
 
     def _extract_ref_strings_with_paths(self) -> List[Dict[str, str]]:
         """Extract $ref strings with their paths (for schemas)."""
         refs: List[Dict[str, str]] = []
 
-        def walk(node: Any, current_path: str = "") -> None:
-            if not isinstance(node, (dict, list)):
-                return
-            if isinstance(node, dict):
-                if isinstance(node.get("$ref"), str):
-                    refs.append(
-                        {
-                            "id": node["$ref"],
-                            "sourcePath": (
-                                f"{current_path}.$ref" if current_path else "$ref"
-                            ),
-                        }
-                    )
-                for k, v in node.items():
-                    walk(v, f"{current_path}.{k}" if current_path else k)
-            else:
-                for i, it in enumerate(node):
-                    walk(it, f"{current_path}[{i}]")
+        def ref_matcher(node: Any, path: str) -> Optional[Dict[str, str]]:
+            """Match $ref properties in dict nodes."""
+            if isinstance(node, dict) and isinstance(node.get("$ref"), str):
+                ref_path = f"{path}.$ref" if path else "$ref"
+                return {"id": node["$ref"], "sourcePath": ref_path}
+            return None
 
-        walk(self.content)
-        uniq: Dict[str, Dict[str, str]] = {}
-        for r in refs:
-            uniq[f"{r['id']}|{r['sourcePath']}"] = r
-        return list(uniq.values())
+        self._walk_and_collect(self.content, refs, ref_matcher)
+        return self._deduplicate_by_id_and_path(refs)
+
+    def _get_field_value(self, field: str) -> Optional[str]:
+        """Get string value from content field."""
+        if not isinstance(self.content, dict):
+            return None
+        v = self.content.get(field)
+        return v if isinstance(v, str) and v.strip() else None
 
     def _first_non_empty_field(self, fields: List[str]) -> Optional[Tuple[str, str]]:
+        """Find first non-empty field, preferring valid GTS IDs."""
+        # First pass: look for valid GTS IDs
         for f in fields:
-            v = (
-                (self.content or {}).get(f)
-                if isinstance(self.content, dict)
-                else None
-            )
-            if isinstance(v, str) and v.strip() and GtsID.is_valid(v):
+            v = self._get_field_value(f)
+            if v and GtsID.is_valid(v):
                 return f, v
+        # Second pass: any non-empty string
         for f in fields:
-            v = (
-                (self.content or {}).get(f)
-                if isinstance(self.content, dict)
-                else None
-            )
-            if isinstance(v, str) and v.strip():
+            v = self._get_field_value(f)
+            if v:
                 return f, v
         return None
 
@@ -275,6 +304,21 @@ class JsonEntity:
         if self.file and self.list_sequence is not None:
             return f"{self.file.path}#{self.list_sequence}"
         return self.file.path if self.file else ""
+
+    def _extract_uuid_from_content(self) -> Optional[str]:
+        """Extract a UUID value from content to use as instance identifier."""
+        if not isinstance(self.content, dict):
+            return None
+        # Look for common UUID fields
+        for field in ["id", "uuid", "instanceId", "instance_id"]:
+            val = self.content.get(field)
+            if isinstance(val, str) and val.strip():
+                # Check if it looks like a UUID (basic check)
+                import re
+                if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', val.lower()):
+                    # Convert UUID to a valid GTS segment format
+                    return val.replace('-', '_')
+        return None
 
     def get_graph(self) -> Dict[str, Set[str]]:
         refs = {}
