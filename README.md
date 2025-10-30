@@ -80,7 +80,7 @@ gts server --port 8081
 gts server --path {PATH_TO_JSON_FILES}
 
 # Generate the OpenAPI schema
-curl -s http://127.0.0.1:8000/openapi.json -o ./openapi.json
+curl -s http://127.0.0.1:8000/openapi.json | jq > ./gts/openapi.json
 
 # See the schema
 curl -s http://127.0.0.1:8000/openapi.json | jq | less -S
