@@ -21,26 +21,27 @@ for entity in reader:
     print(f"{entity.gts_id.id}: {entity.file.name}")
 ```
 
-### TypeSpec
-TypeSpec (`.tsp`) schemas must be pre-compiled to JSON Schema before use with gts-python.
+### TypeSpec (Native Compilation)
 
-**Setup:**
+TypeSpec (`.tsp`) files are now natively supported. When a `.tsp` file is encountered, gts-python automatically compiles it to JSON Schema using the TypeSpec compiler.
+
+**Requirements:**
 ```bash
-# Install TypeSpec compiler
+# Install TypeSpec compiler (one-time setup)
 npm install -g @typespec/compiler @typespec/json-schema
-
-# Compile TypeSpec to JSON Schema
-tsp compile --emit @typespec/json-schema your-schemas/
 ```
 
 **Usage:**
 ```python
 from gts import GtsFileReader
 
-# Point to the generated JSON Schema output directory
-reader = GtsFileReader("tsp-output/@typespec/json-schema/")
-entities = list(reader)
+# Reads JSON, YAML, and TypeSpec files directly
+reader = GtsFileReader("path/to/schemas/")
+for entity in reader:
+    print(f"{entity.gts_id.id}: {entity.file.name}")
 ```
+
+TypeSpec files are automatically compiled on-the-fly. If the TypeSpec compiler is not available, `.tsp` files are skipped with a warning.
 
 See [gts-spec TypeSpec examples](https://github.com/globaltypesystem/gts-spec/tree/main/examples/typespec) for sample TypeSpec definitions.
 

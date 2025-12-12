@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import yaml
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
 import os
 from typing import Iterator, List, Optional, Any
@@ -16,7 +19,7 @@ EXCLUDE_LIST = ["node_modules", "dist", "build"]
 
 
 class GtsFileReader(GtsReader):
-    """Reads GTS entities from JSON and YAML files in directories specified by path."""
+    """Reads GTS entities from JSON, YAML, and TypeSpec files in directories specified by path."""
 
     def __init__(self, path: str | List[str], cfg: Optional[GtsConfig] = None) -> None:
         """
@@ -38,10 +41,96 @@ class GtsFileReader(GtsReader):
         self._current_file_entities: List[GtsEntity] = []
         self._current_entity_index = 0
         self._initialized = False
+        self._tsp_available: Optional[bool] = None
+
+    def _check_tsp_available(self) -> bool:
+        """Check if TypeSpec compiler (tsp) is available in the system."""
+        if self._tsp_available is not None:
+            return self._tsp_available
+        
+        self._tsp_available = shutil.which("tsp") is not None
+        if not self._tsp_available:
+            # Also check npx tsp
+            try:
+                result = subprocess.run(
+                    ["npx", "--yes", "@typespec/compiler", "--version"],
+                    capture_output=True,
+                    timeout=30
+                )
+                self._tsp_available = result.returncode == 0
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                self._tsp_available = False
+        
+        return self._tsp_available
+
+    def _compile_tsp(self, file_path: Path) -> Optional[Any]:
+        """
+        Compile TypeSpec file to JSON Schema and return the parsed content.
+        
+        Args:
+            file_path: Path to .tsp file
+            
+        Returns:
+            Parsed JSON Schema content or None if compilation fails
+        """
+        if not self._check_tsp_available():
+            logging.warning(f"TypeSpec compiler not available, skipping: {file_path}")
+            return None
+        
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                output_dir = Path(tmpdir) / "output"
+                output_dir.mkdir()
+                
+                # Try using tsp directly, fall back to npx
+                tsp_cmd = ["tsp"] if shutil.which("tsp") else ["npx", "--yes", "@typespec/compiler"]
+                
+                cmd = [
+                    *tsp_cmd,
+                    "compile",
+                    str(file_path),
+                    "--emit", "@typespec/json-schema",
+                    "--output-dir", str(output_dir)
+                ]
+                
+                logging.debug(f"Compiling TypeSpec: {' '.join(cmd)}")
+                
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    cwd=file_path.parent
+                )
+                
+                if result.returncode != 0:
+                    logging.warning(f"TypeSpec compilation failed for {file_path}: {result.stderr}")
+                    return None
+                
+                # Find generated JSON Schema files
+                schema_files = list(output_dir.rglob("*.json"))
+                if not schema_files:
+                    logging.warning(f"No JSON Schema generated for {file_path}")
+                    return None
+                
+                # If multiple schemas generated, return as array
+                schemas = []
+                for schema_file in schema_files:
+                    with schema_file.open("r", encoding="utf-8") as f:
+                        schemas.append(json.load(f))
+                
+                return schemas if len(schemas) > 1 else schemas[0] if schemas else None
+                
+        except subprocess.TimeoutExpired:
+            logging.warning(f"TypeSpec compilation timed out for {file_path}")
+            return None
+        except Exception as e:
+            logging.warning(f"Error compiling TypeSpec {file_path}: {e}")
+            return None
 
     def _collect_files(self) -> None:
-        """Collect all JSON and YAML files from the specified paths, following symlinks."""
-        valid_extensions = {'.json', '.jsonc', '.gts', '.yaml', '.yml'}
+        """Collect all JSON, YAML, and TypeSpec files from the specified paths, following symlinks."""
+        valid_extensions = {'.json', '.jsonc', '.gts', '.yaml', '.yml', '.tsp'}
         seen: set[str] = set()
         collected: List[Path] = []
 
@@ -75,19 +164,27 @@ class GtsFileReader(GtsReader):
         self._files = collected
 
     def _load_file(self, file_path: Path) -> Any:
-        """Load content from JSON or YAML file."""
-        with file_path.open("r", encoding="utf-8") as f:
-            if file_path.suffix.lower() in {'.yaml', '.yml'}:
+        """Load content from JSON, YAML, or TypeSpec file."""
+        suffix = file_path.suffix.lower()
+        
+        if suffix == '.tsp':
+            return self._compile_tsp(file_path)
+        elif suffix in {'.yaml', '.yml'}:
+            with file_path.open("r", encoding="utf-8") as f:
                 return yaml.safe_load(f)
-            else:
+        else:
+            with file_path.open("r", encoding="utf-8") as f:
                 return json.load(f)
 
     def _process_file(self, file_path: Path) -> List[GtsEntity]:
-        """Process a single JSON or YAML file and return list of GtsEntity objects."""
+        """Process a single JSON, YAML, or TypeSpec file and return list of GtsEntity objects."""
         entities: List[GtsEntity] = []
 
         try:
             content = self._load_file(file_path)
+            if content is None:
+                return entities
+                
             json_file = GtsFile(
                 path=str(file_path),
                 name=file_path.name,
