@@ -30,6 +30,11 @@ class GtsEntityCastResult:
     forward_errors: List[str] = None  # type: ignore
     casted_entity: Optional[Dict[str, Any]] = None
     error: str = ""
+    # Optional explicit verdict strings ("compatible"/"incompatible"/"unknown").
+    # When set, these take precedence over the boolean flags in to_dict().
+    backward_verdict: Optional[str] = None
+    forward_verdict: Optional[str] = None
+    full_verdict: Optional[str] = None
 
     def __post_init__(self):
         # Initialize list fields if None
@@ -50,6 +55,10 @@ class GtsEntityCastResult:
         def _compat_str(val: bool) -> str:
             return "compatible" if val else "incompatible"
 
+        backward = self.backward_verdict or _compat_str(self.is_backward_compatible)
+        forward = self.forward_verdict or _compat_str(self.is_forward_compatible)
+        full = self.full_verdict or _compat_str(self.is_fully_compatible)
+
         result = {
             "from": self.from_id,
             "to": self.to_id,
@@ -59,9 +68,9 @@ class GtsEntityCastResult:
             "added_properties": self.added_properties,
             "removed_properties": self.removed_properties,
             "changed_properties": self.changed_properties,
-            "backward_compatibility": _compat_str(self.is_backward_compatible),
-            "forward_compatibility": _compat_str(self.is_forward_compatible),
-            "full_compatibility": _compat_str(self.is_fully_compatible),
+            "backward_compatibility": backward,
+            "forward_compatibility": forward,
+            "full_compatibility": full,
             "is_fully_compatible": self.is_fully_compatible,
             "is_backward_compatible": self.is_backward_compatible,
             "is_forward_compatible": self.is_forward_compatible,

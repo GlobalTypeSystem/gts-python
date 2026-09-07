@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import sys
 
 from fastapi import FastAPI, Body, Query
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, model_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 import time
 import logging
@@ -151,7 +151,20 @@ class ValidateTypeSchemaRequest(BaseModel):
 
 
 class ValidateEntityRequest(BaseModel):
-    entity_id: str
+    entity_id: Optional[str] = None
+    gts_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_id(self) -> "ValidateEntityRequest":
+        if not self.entity_id and not self.gts_id:
+            raise ValueError("entity_id (or gts_id) is required")
+        if self.entity_id and self.gts_id and self.entity_id != self.gts_id:
+            raise ValueError("entity_id and gts_id must match when both are provided")
+        return self
+
+    @property
+    def resolved_id(self) -> str:
+        return self.entity_id or self.gts_id or ""
 
 
 class GtsHttpServer:
@@ -350,7 +363,7 @@ class GtsHttpServer:
         return self.ops.validate_schema(body.type_id).to_dict()
 
     async def validate_entity(self, body: ValidateEntityRequest) -> Dict[str, Any]:
-        return self.ops.validate_entity(body.entity_id).to_dict()
+        return self.ops.validate_entity(body.resolved_id).to_dict()
 
     async def schema_graph(
         self, id: str = Query(..., alias="gts_id")

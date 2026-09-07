@@ -6,6 +6,8 @@ A minimal, idiomatic Python library for working with **GTS** ([Global Type Syste
 
 ## Roadmap
 
+Current supported GTS spec version: 0.13
+
 Featureset:
 
 - [x] **OP#1 - ID Validation**: Verify identifier syntax using regex patterns
@@ -22,7 +24,8 @@ Featureset:
 - [x] **OP#9 - Version Casting**: Transform instances between compatible MINOR versions
 - [x] **OP#10 - Query Execution**: Filter identifier collections using the GTS query language
 - [x] **OP#11 - Attribute Access**: Retrieve property values and metadata using the attribute selector (`@`)
-- [ ] **OP#12 - Schema Validation**: Validate schema against its precedent schema
+- [x] **OP#12 - Type Derivation Validation**: Validate that derived GTS Type Schemas correctly extend their base chain
+- [x] **OP#13 - Schema Traits Validation**: Validate schema traits (`x-gts-traits-schema` / `x-gts-traits`).
 
 See details in [gts/README.md](gts/README.md)
 
@@ -32,9 +35,9 @@ Other GTS spec [Reference Implementation](https://github.com/globaltypesystem/gt
 - [x] **CLI** - command-line interface for all GTS operations
 - [x] **Web server** - a non-production web-server with REST API for the operations processing and testing
 - [x] **x-gts-ref support** - to support special GTS entity reference annotation in schemas
-- [ ] **YAML support** - to support YAML files (*.yml, *.yaml) as input files
-- [ ] **TypeSpec support** - add [typespec.io](https://typespec.io/) files (*.tsp) support
-- [ ] **UUID for instances** - to support UUID as ID in JSON instances
+- [x] **YAML support** - to support YAML files (*.yml, *.yaml) as input files
+- [x] **UUID for instances** - to support UUID as ID in JSON instances
+- [ ] **TypeSpec support** - direct support for [typespec.io](https://typespec.io/) files (*.tsp) input files
 
 Technical Backlog:
 

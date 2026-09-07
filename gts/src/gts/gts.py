@@ -313,6 +313,17 @@ class GtsID:
         def match_segments(
             pattern_segs: List[GtsIdSegment], candidate_segs: List[GtsIdSegment]
         ) -> bool:
+            # Pattern ending with '~*' means "this type and any descendants".
+            # It should match both:
+            # - the base type itself (same prefix, no extra segment), and
+            # - instances/derived ids under that prefix.
+            if (
+                pattern_segs
+                and pattern_segs[-1].is_wildcard
+                and len(pattern_segs) == len(candidate_segs) + 1
+            ):
+                return match_segments(pattern_segs[:-1], candidate_segs)
+
             # If pattern is longer than candidate, no match
             if len(pattern_segs) > len(candidate_segs):
                 return False
@@ -331,8 +342,9 @@ class GtsID:
                         return False
                     if p_seg.type and p_seg.type != c_seg.type:
                         return False
-                    # Check version fields if they are set in the pattern
-                    if p_seg.ver_major != 0 and p_seg.ver_major != c_seg.ver_major:
+                    # Check version fields when version is explicitly present in
+                    # the wildcard segment (including v0.*).
+                    if ".v" in p_seg.segment and p_seg.ver_major != c_seg.ver_major:
                         return False
                     if (
                         p_seg.ver_minor is not None

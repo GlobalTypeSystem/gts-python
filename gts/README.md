@@ -1,238 +1,333 @@
 # GTS Python Library
 
-A minimal, idiomatic Python library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and type definitions.
+Python helpers and a reference HTTP service for the [Global Type System (GTS)](https://github.com/globaltypesystem/gts-spec). The package supports GTS identifier parsing, JSON Schema-backed validation, schema compatibility and derivation checks, traits, casting, queries, file loading, a CLI, and a FastAPI application.
 
-## File Format Support
+The package targets GTS specification v0.13.1 and requires Python 3.9 or later.
 
-GTS Python supports multiple file formats for schemas and instances:
+## Installation
 
-### JSON (Native)
-Standard JSON format with `.json`, `.jsonc`, and `.gts` extensions.
-
-### YAML
-Full YAML support with `.yaml` and `.yml` extensions. YAML files are automatically parsed and treated identically to JSON.
-
-```python
-from gts import GtsFileReader
-
-# Reads both JSON and YAML files
-reader = GtsFileReader("path/to/schemas/")
-for entity in reader:
-    print(f"{entity.gts_id.id}: {entity.file.name}")
-```
-
-### TypeSpec
-TypeSpec (`.tsp`) schemas must be pre-compiled to JSON Schema before use with gts-python.
-
-**Setup:**
 ```bash
-# Install TypeSpec compiler
-npm install -g @typespec/compiler @typespec/json-schema
-
-# Compile TypeSpec to JSON Schema
-tsp compile --emit @typespec/json-schema your-schemas/
+python -m pip install gts
 ```
 
-**Usage:**
-```python
-from gts import GtsFileReader
+The package installs these runtime dependencies:
 
-# Point to the generated JSON Schema output directory
-reader = GtsFileReader("tsp-output/@typespec/json-schema/")
-entities = list(reader)
-```
+- `jsonschema` for JSON Schema validation;
+- `referencing` for standards-aware `$ref` resolution during instance validation;
+- `jsonsubschema` for accepted-instance-set inclusion checks;
+- `fastapi` and `uvicorn` for the HTTP server;
+- `PyYAML` for YAML input.
 
-See [gts-spec TypeSpec examples](https://github.com/globaltypesystem/gts-spec/tree/main/examples/typespec) for sample TypeSpec definitions.
+## Quick start
 
-## Featureset
-
-GTS specification v0.13.1 reference implementation status:
-
----
-
-- [x] **OP#1 - ID Validation**: Verify identifier syntax
+`GtsOps` is the high-level in-memory API. It is intentionally imported from `gts.ops`; the package root exports the lower-level model, reader, store, and ID classes.
 
 ```python
-from gts import GtsID
+from gts.ops import GtsOps
 
-is_valid = GtsID.is_valid("gts.x.core.events.event.v1~")
-print(is_valid)  # True or False
+ops = GtsOps()
+schema_id = "gts.example.demo._.event.v1~"
+instance_id = "gts.example.demo._.event.v1~example.demo._.created.v1"
+
+schema_result = ops.add_entity(
+    {
+        "$id": f"gts://{schema_id}",
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+        },
+    },
+    validate=True,
+)
+assert schema_result.ok
+
+instance_result = ops.add_entity(
+    {"id": instance_id, "name": "created"},
+    validate=True,
+)
+assert instance_result.ok
+
+assert ops.validate_entity(instance_id).ok
+print(ops.get_entity(instance_id).to_dict())
 ```
 
----
+`add_entity(..., validate=True)` validates a schema fully, including schema-chain, final/abstract, and trait checks. A failed registration is rolled back, including restoration of an entity that was replaced by the candidate.
 
-- [x] **OP#2 - ID Extraction**: Extract GTS ID, type_id, and metadata from JSON objects or JSON Schema documents
+## Public Python API
+
+### Package-root exports
 
 ```python
-import json
-from gts import GtsEntity, DEFAULT_GTS_CONFIG
-
-content = json.load(open("path/to/file.json"))
-entity = GtsEntity(content=content, cfg=DEFAULT_GTS_CONFIG)
-if entity.gts_id:
-    print(entity.gts_id.id)      # GTS identifier
-    print(entity.type_id)         # Parent type ID (if chained)
-    print(entity.is_schema)       # True if JSON Schema entity
+from gts import (
+    DEFAULT_GTS_CONFIG,
+    GtsConfig,
+    GtsEntity,
+    GtsFile,
+    GtsFileReader,
+    GtsID,
+    GtsIdSegment,
+    GtsPathResolver,
+    GtsReader,
+    GtsStore,
+    GtsWildcard,
+    JsonEntity,
+    JsonFile,
+    JsonPathResolver,
+    ValidationError,
+    ValidationResult,
+)
 ```
 
----
+`JsonEntity`, `JsonFile`, and `JsonPathResolver` are backward-compatible aliases for their `Gts*` counterparts.
 
-- [x] **OP#3 - ID Parsing**: Decompose identifiers into constituent parts (vendor, package, namespace, type, version)
-
-```python
-from gts import GtsID
-
-gts = GtsID("gts.x.core.events.event.v1~")
-print(gts.is_type)            # True
-for seg in gts.gts_id_segments:
-    print(seg.vendor, seg.package, seg.namespace, seg.type)
-```
-
-Supports combined anonymous instance IDs with UUID tails:
-```python
-gts = GtsID("gts.x.core.events.type.v1~x.orders.v1.0~7a1d2f34-5678-49ab-9012-abcdef123456")
-print(gts.uuid_tail)  # "7a1d2f34-5678-49ab-9012-abcdef123456"
-```
-
----
-
-- [x] **OP#4 - ID Pattern Matching**: Match identifiers against wildcard patterns
+### GTS identifiers
 
 ```python
 from gts import GtsID, GtsWildcard
 
-gts = GtsID("gts.x.core.events.event.v1.0~")
-pattern = GtsWildcard("gts.x.core.events.event.v1~*")
-gts.wildcard_match(pattern)  # True - v1~* matches any v1.x~
-```
+schema_id = GtsID("gts.example.demo._.event.v1~")
+assert schema_id.is_type
+assert schema_id.get_type_id() is None
+assert GtsID.is_valid("gts://gts.example.demo._.event.v1~")
 
----
-
-- [x] **OP#5 - ID to UUID Mapping**: Generate deterministic UUIDs from GTS identifiers
-
-```python
-from gts import GtsID
-
-gts = GtsID("gts.x.core.events.event.v1~")
-uuid = gts.to_uuid()  # UUID5 based on GTS namespace
-```
-
-Combined anonymous instances return their embedded UUID directly.
-
----
-
-- [x] **OP#6 - Schema Validation**: Validate object instances against their type schemas. Supports `x-gts-abstract` (rejects direct instances) and `x-gts-ref` constraints.
-
-```python
-from gts import GtsStore, GtsFileReader
-
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-store.validate_instance(gts_id="gts.x.core.events.event.v1~instance.v1")
-```
-
----
-
-- [x] **OP#7 - Relationship Resolution**: Build schema/entity dependency graphs
-
-```python
-from gts import GtsStore, GtsFileReader
-
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-graph = store.build_schema_graph(gts_id="gts.x.core.events.event.v1~")
-```
-
----
-
-- [x] **OP#8 - Compatibility Checking**: Check Type Schema evolution compatibility
-
-- [x] **OP#8.1 - Backward compatibility**
-- [x] **OP#8.2 - Forward compatibility**
-- [x] **OP#8.3 - Full compatibility**
-
-```python
-from gts import GtsStore, GtsFileReader
-
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-result = store.is_minor_compatible(
-    "gts.x.core.events.event.v1.0~",
-    "gts.x.core.events.event.v1.1~"
+instance_id = GtsID(
+    "gts.example.demo._.event.v1~example.demo._.created.v1"
 )
-print(result.is_backward_compatible)
-print(result.is_forward_compatible)
-print(result.is_fully_compatible)
+assert instance_id.get_type_id() == "gts.example.demo._.event.v1~"
+print(instance_id.to_uuid())
+
+pattern = GtsWildcard("gts.example.demo._.event.v1~*")
+assert instance_id.wildcard_match(pattern)
 ```
 
----
+`GtsID` accepts either `gts.<segment>...` or the URI form `gts://gts.<segment>...`. A type identifier ends in `~`; a well-known instance identifier appends one or more relative segments. `GtsID.to_uuid()` returns a deterministic UUID5, except combined anonymous IDs return their embedded UUID tail.
 
-- [x] **OP#9 - Version Casting**: Cast instances between compatible MINOR versions
+`GtsIdSegment` exposes `vendor`, `package`, `namespace`, `type`, `ver_major`, `ver_minor`, `is_type`, and `is_wildcard`. `GtsID.gts_id_segments` contains the parsed segments. `GtsID.split_at_path(value)` separates an optional `@path` selector, and `GtsID.parse_query(expr)` / `GtsID.match_query(obj, gts_field, expr)` provide lower-level query parsing and matching helpers.
+
+Wildcard patterns may end in `.*` or `~*`. `~*` matches the base type and its descendants for ID matching; OP#10 queries apply an additional depth rule and return only IDs with a suffix at the wildcard position.
+
+### Entities and configuration
 
 ```python
-from gts import GtsStore, GtsFileReader
+from gts import DEFAULT_GTS_CONFIG, GtsEntity
 
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-result = store.cast(
-    from_id="gts.x.core.events.event.v1.0~instance.v1",
-    target_schema_id="gts.x.core.events.event.v1.1~"
+entity = GtsEntity(
+    content={
+        "id": "gts.example.demo._.event.v1~example.demo._.created.v1",
+        "name": "created",
+    },
+    cfg=DEFAULT_GTS_CONFIG,
 )
+
+print(entity.raw_id)
+print(entity.gts_id)
+print(entity.type_id)
+print(entity.selected_entity_field)
+print(entity.selected_type_id_field)
 ```
 
----
+`GtsEntity` detects schemas from `http://json-schema.org/` and `https://json-schema.org/` `$schema` URLs. It derives a raw ID from `GtsConfig.entity_id_fields` and an instance type ID from `GtsConfig.schema_id_fields`. `DEFAULT_GTS_CONFIG` recognizes common GTS field names including `$id`, `gtsId`, `id`, `gtsType`, and `type`.
 
-- [x] **OP#10 - Query Execution**: Filter entities using the GTS query language
+`GtsPathResolver.resolve(path)` accepts dot paths, slash paths, and array indexes. It returns the resolver with `resolved`, `value`, `error`, and `available_fields` populated; `to_dict()` returns the corresponding serializable result.
+
+Public entity helpers:
+
+- `entity.resolve_path(path)` resolves dot, slash, and array-index paths and returns a `GtsPathResolver` result;
+- `entity.cast(to_schema, from_schema, resolver=None)` casts an instance to a schema;
+- `entity.gts_refs` and `entity.schemaRefs` list discovered GTS IDs and `$ref` values with source paths.
+
+### File loading
+
+`GtsFileReader(path, cfg=None)` accepts one file path or a list of file/directory paths. It recursively loads `.json`, `.jsonc`, `.gts`, `.yaml`, and `.yml` files, skips `node_modules`, `dist`, and `build` directories, and yields entities with valid GTS IDs. JSON-family files use Python's standard JSON parser, so `.jsonc` files must not contain comments.
 
 ```python
-from gts import GtsStore, GtsFileReader
+from gts import GtsFileReader, GtsStore
 
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-result = store.query("gts.x.core.events.event.v1~[status=active]")
-print(f"Found {result.count} entities")
+reader = GtsFileReader(["schemas", "instances.yaml"])
+store = GtsStore(reader)
+for entity_id, entity in store.items():
+    print(entity_id, entity.is_schema)
 ```
 
----
+TypeSpec (`.tsp`) inputs must be compiled to JSON Schema before loading.
 
-- [x] **OP#11 - Attribute Access**: Retrieve property values via the attribute selector (`@`)
+### Store API
+
+`GtsStore` is the low-level registry. Use `GtsStore(reader)` to populate it from a `GtsReader`, or `GtsStore(reader=None)` for an empty in-memory store.
+
+| Method | Purpose |
+| --- | --- |
+| `register(entity)` / `unregister(entity_id)` | Add or remove an in-memory entity. Instances are keyed by `raw_id`; schemas use their GTS ID. |
+| `register_schema(type_id, schema)` | Legacy schema registration helper; `type_id` must end in `~`. |
+| `get(entity_id)` | Return `GtsEntity` or `None`. |
+| `items()` | Return an iterator over in-memory `(entity_id, entity)` pairs. |
+| `get_schema_content(type_id)` | Return a schema dictionary or raise `KeyError`. |
+| `validate_schema_basic(type_id)` | Check `$ref` format, `x-gts-ref` declarations, and GTS keyword placement. |
+| `validate_schema(type_id)` | Run full JSON Schema, derivation, final/abstract, x-gts-ref, and trait validation. |
+| `validate_instance(gts_id)` | Validate a well-known or UUID-addressed instance against its type schema. |
+| `is_minor_compatible(old_schema_id, new_schema_id)` | Return compatibility verdicts for two registered schemas. |
+| `cast(from_id, target_schema_id)` | Cast a registered **instance** to a target schema. |
+| `build_schema_graph(gts_id)` | Build the entity/schema reference graph. |
+| `query(expr, limit=100)` | Execute an OP#10 query and return `GtsStoreQueryResult`. |
+
+### High-level operations API
+
+Import `GtsOps` and its result dataclasses from `gts.ops`.
 
 ```python
-from gts import GtsStore, GtsFileReader
+from gts.ops import GtsOps
 
-reader = GtsFileReader(path="path/to/gts/files")
-store = GtsStore(reader=reader)
-entity = store.get("gts.x.core.events.event.v1~")
-if entity:
-    res = entity.resolve_path("gtsId")
-    if res.resolved:
-        print(res.value)
+ops = GtsOps(path=["schemas", "instances"])
+ops.reload_from_path("replacement-directory")
+
+ops.add_entity(content, validate=False)
+ops.add_entities([content_a, content_b])
+ops.add_schema(type_id, schema)
+ops.extract_id(content)
+ops.validate_id(gts_id)
+ops.parse_id(gts_id)
+ops.match_id_pattern(candidate, pattern)
+ops.uuid(gts_id)
+ops.validate_instance(gts_id)
+ops.validate_schema(type_id)
+ops.validate_entity(gts_id)
+ops.schema_graph(gts_id)
+ops.compatibility(old_schema_id, new_schema_id)
+ops.cast(instance_id, target_schema_id)
+ops.query(expr, limit=100)
+ops.attr("gts.example.demo._.event.v1~@properties.name")
+ops.get_entity(gts_id)
+ops.get_entities(limit=100)
+ops.list(limit=100)
 ```
 
----
+Operation methods return result objects with `.to_dict()`. Validation failures are represented by `ok=False` and an `error` string in the facade API; direct `GtsStore` validation methods raise exceptions.
 
-- [x] **OP#12 - Type Derivation Validation**: Validate that derived GTS Type Schemas correctly extend their base chain
+## Schema validation and GTS extensions
 
-Checks derivation chain compatibility including:
-- Constraint tightening (valid) vs loosening (invalid)
-- `additionalProperties` closedness inheritance
-- `x-gts-final` enforcement (blocks derivation)
-- Property type compatibility
+### JSON Schema dialects and references
 
----
+The library validates schemas with the dialect named by `$schema`; if absent, it uses Draft 7 for schema meta-validation. GTS permits local JSON Pointers (`#/...`) and GTS references (`gts://gts...`) in `$ref`. Other external `$ref` URI schemes are rejected.
 
-- [x] **OP#13 - Schema Traits Validation**: Validate `x-gts-traits` and `x-gts-traits-schema`
+During instance validation, GTS references are resolved with `referencing.Registry`. Draft 2019-09 and Draft 2020-12 `$ref` sibling constraints are preserved, so a sibling such as `minLength` is enforced.
 
-Supports:
-- Effective trait schema composition via `allOf` across the chain
-- RFC 7396 JSON Merge Patch for trait value merging
-- `const` / `default` materialization
-- Required-trait completeness checking (skipped for `x-gts-abstract` types)
+### `x-gts-ref`
 
----
+`x-gts-ref` restricts a string value to a GTS ID or pattern. It accepts an absolute `gts.` pattern or a JSON Pointer beginning with `/` that resolves to one. If a store is present, the referenced entity must be registered.
 
-### Schema Modifiers
+`x-gts-ref` can appear in `oneOf`, `anyOf`, and `allOf`. For x-gts-ref-only combinator branches, GTS evaluates the x-gts-ref constraints as the combinator condition. For ordinary or mixed JSON Schema branches, normal JSON Schema structural matching determines which branch’s x-gts-ref constraints are applied.
 
-- **`x-gts-final`**: Prevents type derivation. Validated during OP#12 chain checks.
-- **`x-gts-abstract`**: Prevents direct instantiation. Validated during OP#6 instance validation.
-- Both must be booleans, are mutually exclusive, and must appear at schema top level only.
+### `x-gts-final` and `x-gts-abstract`
+
+Both keywords must be top-level booleans and cannot both be `true`:
+
+- `x-gts-final: true` prevents derived type schemas;
+- `x-gts-abstract: true` prevents direct instances and defers required trait completeness to concrete descendants.
+
+### Traits
+
+`x-gts-traits-schema` declares the schema of type traits, while `x-gts-traits` supplies values. Effective schemas compose through `allOf`; values merge root-to-leaf according to RFC 7396 JSON Merge Patch.
+
+Missing trait properties are materialized from the nearest `default`, including `default: null`. A JSON Schema `const` constrains a supplied value but is **not** materialized as a missing trait value. Concrete types must resolve required trait properties; abstract types still validate supplied trait values but defer completeness.
+
+### Derivation and compatibility
+
+OP#12 derivation accepts a derived schema only when its declared accepted-instance set is included in its base schema, subject to GTS rules for disabled properties and closed `additionalProperties` branches.
+
+OP#8 compatibility has three string verdicts:
+
+- `compatible`: inclusion was proved;
+- `incompatible`: inclusion was disproved;
+- `unknown`: the inclusion engine could not prove the relation.
+
+`GtsEntityCastResult.to_dict()` returns `backward_compatibility`, `forward_compatibility`, and `full_compatibility` using those strings. Its boolean `is_*_compatible` fields are `True` only for `compatible`; they are `False` for both `incompatible` and `unknown`.
+
+## HTTP server
+
+Start a local server:
+
+```bash
+gts --path schemas server --host 127.0.0.1 --port 8000
+```
+
+`GtsHttpServer` is available from `gts.server` when embedding the application:
+
+```python
+from gts.ops import GtsOps
+from gts.server import GtsHttpServer
+
+app = GtsHttpServer(ops=GtsOps()).app
+```
+
+| Endpoint | Method | Request |
+| --- | --- | --- |
+| `/entities` | `GET` | `limit` query parameter, 1–1000; lists registered entities. |
+| `/entities/{gts_id}` | `GET` | Retrieves one entity. |
+| `/entities` | `POST` | Entity/schema body; optional `validate=true` runs full validation. Failed registration returns 422 and is rolled back. |
+| `/entities/bulk` | `POST` | JSON array of entity/schema objects. |
+| `/type-schemas` | `POST` | `{"type_id": "...~", "type_schema": {...}}`. |
+| `/validate-id` | `GET` | `gts_id` query parameter. |
+| `/extract-id` | `POST` | JSON entity/schema object. |
+| `/parse-id` | `GET` | `gts_id` query parameter. |
+| `/match-id-pattern` | `GET` | `candidate` and `pattern` query parameters. |
+| `/uuid` | `GET` | `gts_id` query parameter. |
+| `/validate-instance` | `POST` | `{"instance_id": "..."}`. |
+| `/validate-type-schema` | `POST` | `{"type_id": "...~"}`. |
+| `/validate-entity` | `POST` | `{"entity_id": "..."}` or `{"gts_id": "..."}`. When both are supplied, they must be equal. |
+| `/resolve-relationships` | `GET` | `gts_id` query parameter. |
+| `/compatibility` | `GET` | `old_type_id` and `new_type_id` query parameters. |
+| `/cast` | `POST` | `{"instance_id": "...", "to_type_id": "...~"}`. |
+| `/query` | `GET` | `expr` and optional `limit` query parameters, 1–1000. |
+| `/attr` | `GET` | `gts_with_path` query parameter containing `@path`. |
+
+FastAPI exposes interactive OpenAPI documentation when the server is running. Generate the OpenAPI JSON without running the service:
+
+```bash
+gts openapi-spec --out openapi.json
+```
+
+## CLI
+
+All commands accept optional global `--path`, `--config`, and repeatable `-v` / `--verbose` options. Place global options before the subcommand, for example `gts --path schemas query --expr 'gts.example.*'`.
+
+```bash
+gts validate-id --gts-id 'gts.example.demo._.event.v1~'
+gts parse-id --gts-id 'gts.example.demo._.event.v1~'
+gts match-id-pattern --candidate 'gts.example.demo._.event.v1~' --pattern 'gts.example.*'
+gts uuid --gts-id 'gts.example.demo._.event.v1~'
+gts validate-instance --gts-id 'gts.example.demo._.event.v1~example.demo._.created.v1'
+gts resolve-relationships --gts-id 'gts.example.demo._.event.v1~'
+gts compatibility --old-schema-id 'gts.example.demo._.event.v1.0~' --new-schema-id 'gts.example.demo._.event.v1.1~'
+gts cast --from-id 'gts.example.demo._.event.v1~example.demo._.created.v1' --to-schema-id 'gts.example.demo._.event.v1.1~'
+gts query --expr 'gts.example.demo.*[status=active]' --limit 10
+gts attr --gts-with-path 'gts.example.demo._.event.v1~@properties.name'
+gts list --limit 100
+gts server --port 8000
+gts openapi-spec --out openapi.json
+```
+
+CLI commands print their result as JSON. The CLI provides `validate-instance`, but not a `validate-schema` subcommand; use the Python API or `POST /validate-type-schema` for full type-schema validation.
+
+## File format support
+
+### JSON and YAML
+
+JSON (`.json`, `.jsonc`, `.gts`) and YAML (`.yaml`, `.yml`) files are loaded identically by `GtsFileReader`.
+
+### TypeSpec
+
+Compile TypeSpec schemas to JSON Schema before loading them:
+
+```bash
+npm install -g @typespec/compiler @typespec/json-schema
+tsp compile --emit @typespec/json-schema your-schemas/
+```
+
+```python
+from gts import GtsFileReader
+
+entities = list(GtsFileReader("tsp-output/@typespec/json-schema/"))
+```

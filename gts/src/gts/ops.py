@@ -379,26 +379,26 @@ class GtsOps:
                         is_type_schema=True,
                     )
 
-        # Register the entity (use raw_id for non-GTS instances)
+        store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
+        previous = self.store.get(store_key)
         self.store.register(entity)
 
-        # Validate schema structure (basic checks only, not full chain validation)
-        if entity.is_schema:
-            try:
+        try:
+            if entity.is_schema:
                 self.store.validate_schema_basic(entity.gts_id.id)
-            except Exception as e:
-                return GtsAddEntityResult(
-                    ok=False, error=f"Validation failed: {str(e)}"
-                )
-
-        # If validation is requested, validate the instance as well
-        if validate and not entity.is_schema and entity.gts_id:
-            try:
-                self.store.validate_instance(entity.gts_id.id)
-            except Exception as e:
-                return GtsAddEntityResult(
-                    ok=False, error=f"Validation failed: {str(e)}"
-                )
+                if validate:
+                    self.store.validate_schema(entity.gts_id.id)
+            elif validate:
+                self.store.validate_instance(entity.raw_id or entity.gts_id.id)
+        except Exception as e:
+            self.store.unregister(store_key)
+            if previous:
+                self.store.register(previous)
+            return GtsAddEntityResult(
+                ok=False,
+                error=f"Validation failed: {str(e)}",
+                is_type_schema=entity.is_schema,
+            )
 
         # Return gts_id if available, otherwise raw_id
         entity_id = entity.gts_id.id if entity.gts_id else (entity.raw_id or "")

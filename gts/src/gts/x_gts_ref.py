@@ -13,7 +13,42 @@ Key optimizations:
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
+from jsonschema.validators import validator_for
+
 from .gts import GtsID, GTS_URI_PREFIX
+
+
+def _without_x_gts_ref(schema: Any) -> Any:
+    if isinstance(schema, dict):
+        stripped = {
+            key: _without_x_gts_ref(value)
+            for key, value in schema.items()
+            if key != "x-gts-ref"
+        }
+        for keyword in ("oneOf", "anyOf", "allOf"):
+            branches = schema.get(keyword)
+            if isinstance(branches, list) and _is_x_gts_ref_only_combinator(branches):
+                stripped.pop(keyword, None)
+        return stripped
+    if isinstance(schema, list):
+        return [_without_x_gts_ref(value) for value in schema]
+    return schema
+
+
+def _is_x_gts_ref_only_combinator(branches: List[Any]) -> bool:
+    return bool(branches) and all(
+        isinstance(_without_x_gts_ref(branch), dict)
+        and not _without_x_gts_ref(branch)
+        for branch in branches
+    )
+
+
+def _is_structurally_valid(instance: Any, schema: Any) -> bool:
+    try:
+        validator = validator_for(schema)(_without_x_gts_ref(schema))
+        return validator.is_valid(instance)
+    except Exception:
+        return False
 
 
 class XGtsRefValidationError(Exception):
@@ -55,35 +90,82 @@ class XGtsRefValidator:
         Returns:
             List of validation errors (empty if valid)
         """
-        errors = []
+        errors: List[XGtsRefValidationError] = []
 
-        def visit_instance(inst, sch, path):
+        def visit_instance(inst, sch, path, errs):
             """Visit instance nodes and validate x-gts-ref constraints."""
             if not isinstance(sch, dict):
                 return
 
-            # Check for x-gts-ref constraint
             if "x-gts-ref" in sch and isinstance(inst, str):
                 error = self._validate_ref_value(inst, sch["x-gts-ref"], path, schema)
                 if error:
-                    errors.append(error)
+                    errs.append(error)
 
-            # Recurse into object properties
+            one_of = sch.get("oneOf")
+            if isinstance(one_of, list):
+                if _is_x_gts_ref_only_combinator(one_of):
+                    branch_errors = [_validate_branch(inst, branch, path) for branch in one_of]
+                    matching = sum(not branch for branch in branch_errors)
+                    if matching == 0:
+                        errs.append(XGtsRefValidationError(path, inst, "", "oneOf: no branch matched"))
+                    elif matching > 1:
+                        errs.append(
+                            XGtsRefValidationError(
+                                path,
+                                inst,
+                                "",
+                                f"oneOf: {matching} branches matched, expected exactly 1",
+                            )
+                        )
+                else:
+                    matching_branches = [
+                        branch for branch in one_of if _is_structurally_valid(inst, branch)
+                    ]
+                    if len(matching_branches) == 1:
+                        errs.extend(_validate_branch(inst, matching_branches[0], path))
+
+            any_of = sch.get("anyOf")
+            if isinstance(any_of, list):
+                if _is_x_gts_ref_only_combinator(any_of):
+                    branch_errors = [_validate_branch(inst, branch, path) for branch in any_of]
+                    if not any(not branch for branch in branch_errors):
+                        errs.append(XGtsRefValidationError(path, inst, "", "anyOf: no branch matched"))
+                else:
+                    matching_branches = [
+                        branch for branch in any_of if _is_structurally_valid(inst, branch)
+                    ]
+                    branch_errors = [
+                        _validate_branch(inst, branch, path) for branch in matching_branches
+                    ]
+                    if matching_branches and not any(not branch for branch in branch_errors):
+                        errs.append(XGtsRefValidationError(path, inst, "", "anyOf: no branch matched"))
+
+            all_of = sch.get("allOf")
+            if isinstance(all_of, list):
+                for branch in all_of:
+                    if _is_structurally_valid(inst, branch):
+                        errs.extend(_validate_branch(inst, branch, path))
+
             if sch.get("type") == "object" and "properties" in sch:
                 if isinstance(inst, dict):
                     for prop_name, prop_schema in sch["properties"].items():
                         if prop_name in inst:
                             prop_path = f"{path}.{prop_name}" if path else prop_name
-                            visit_instance(inst[prop_name], prop_schema, prop_path)
+                            visit_instance(inst[prop_name], prop_schema, prop_path, errs)
 
-            # Recurse into array items
             if sch.get("type") == "array" and "items" in sch:
                 if isinstance(inst, list):
                     for idx, item in enumerate(inst):
                         item_path = f"{path}[{idx}]"
-                        visit_instance(item, sch["items"], item_path)
+                        visit_instance(item, sch["items"], item_path, errs)
 
-        visit_instance(instance, schema, instance_path)
+        def _validate_branch(inst, branch, path):
+            branch_errors: List[XGtsRefValidationError] = []
+            visit_instance(inst, branch, path, branch_errors)
+            return branch_errors
+
+        visit_instance(instance, schema, instance_path, errors)
         return errors
 
     def validate_schema(
