@@ -134,16 +134,24 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 class SchemaRegister(BaseModel):
     type_id: str
-    schema_content: Dict[str, Any] = Field(..., alias="schema")
+    type_schema: Dict[str, Any]
 
 
 class CastRequest(BaseModel):
     instance_id: str
-    to_schema_id: str
+    to_type_id: str
 
 
 class ValidateInstanceRequest(BaseModel):
     instance_id: str
+
+
+class ValidateTypeSchemaRequest(BaseModel):
+    type_id: str
+
+
+class ValidateEntityRequest(BaseModel):
+    entity_id: str
 
 
 class GtsHttpServer:
@@ -199,10 +207,10 @@ class GtsHttpServer:
             response_class=JSONResponse,
         )
         app.add_api_route(
-            "/schemas",
+            "/type-schemas",
             self.add_schema,
             methods=["POST"],
-            summary="Register schema by explicit type_id",
+            summary="Register a GTS Type Schema under an explicit type_id",
             response_class=JSONResponse,
         )
 
@@ -248,6 +256,20 @@ class GtsHttpServer:
             methods=["POST"],
             summary="Validate instance by GTS ID",
         )
+        # Op #12 - validate type schema
+        app.add_api_route(
+            "/validate-type-schema",
+            self.validate_type_schema,
+            methods=["POST"],
+            summary="Validate that a derived GTS Type Schema correctly extends its base chain",
+        )
+        # validate entity (instance or schema)
+        app.add_api_route(
+            "/validate-entity",
+            self.validate_entity,
+            methods=["POST"],
+            summary="Validate entity (instance or type schema) by GTS Identifier",
+        )
         # Op #7 - schema graph / relationships
         app.add_api_route(
             "/resolve-relationships",
@@ -260,7 +282,7 @@ class GtsHttpServer:
             "/compatibility",
             self.compatibility,
             methods=["GET"],
-            summary="Check minor version compatibility",
+            summary="Check Type Schema evolution compatibility",
         )
         # Op #9 - cast
         app.add_api_route(
@@ -299,7 +321,7 @@ class GtsHttpServer:
 
     async def add_schema(self, body: SchemaRegister) -> JSONResponse:
         return JSONResponse(
-            self.ops.add_schema(body.type_id, body.schema_content).to_dict()
+            self.ops.add_schema(body.type_id, body.type_schema).to_dict()
         )
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
@@ -324,6 +346,12 @@ class GtsHttpServer:
     async def validate_instance(self, body: ValidateInstanceRequest) -> Dict[str, Any]:
         return self.ops.validate_instance(body.instance_id).to_dict()
 
+    async def validate_type_schema(self, body: ValidateTypeSchemaRequest) -> Dict[str, Any]:
+        return self.ops.validate_schema(body.type_id).to_dict()
+
+    async def validate_entity(self, body: ValidateEntityRequest) -> Dict[str, Any]:
+        return self.ops.validate_entity(body.entity_id).to_dict()
+
     async def schema_graph(
         self, id: str = Query(..., alias="gts_id")
     ) -> Dict[str, Any]:
@@ -331,13 +359,13 @@ class GtsHttpServer:
 
     async def compatibility(
         self,
-        old: str = Query(..., alias="old_schema_id"),
-        new: str = Query(..., alias="new_schema_id"),
+        old: str = Query(..., alias="old_type_id"),
+        new: str = Query(..., alias="new_type_id"),
     ) -> Dict[str, Any]:
         return self.ops.compatibility(old, new).to_dict()
 
     async def cast(self, body: CastRequest) -> Dict[str, Any]:
-        return self.ops.cast(body.instance_id, body.to_schema_id).to_dict()
+        return self.ops.cast(body.instance_id, body.to_type_id).to_dict()
 
     async def query(
         self, expr: str = Query(...), limit: int = Query(100, ge=1, le=1000)

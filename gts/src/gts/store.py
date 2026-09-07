@@ -298,11 +298,545 @@ class GtsStore:
                 f"Schema x-gts-ref validation failed: {'; '.join(error_messages)}"
             )
 
+    @staticmethod
+    def _validate_gts_keywords(content: Dict[str, Any]) -> None:
+        """Validate x-gts-final, x-gts-abstract, x-gts-traits, x-gts-traits-schema placement."""
+
+        def _contains_key_recursive(value: Any, key: str) -> bool:
+            if isinstance(value, dict):
+                if key in value:
+                    return True
+                return any(_contains_key_recursive(v, key) for v in value.values())
+            elif isinstance(value, list):
+                return any(_contains_key_recursive(v, key) for v in value)
+            return False
+
+        # Validate x-gts-final
+        final_val = content.get("x-gts-final")
+        if final_val is not None:
+            if not isinstance(final_val, bool):
+                raise ValueError(f"x-gts-final must be a boolean, got {type(final_val).__name__}")
+
+        # Validate x-gts-abstract
+        abstract_val = content.get("x-gts-abstract")
+        if abstract_val is not None:
+            if not isinstance(abstract_val, bool):
+                raise ValueError(f"x-gts-abstract must be a boolean, got {type(abstract_val).__name__}")
+
+        # Mutual exclusion
+        if final_val is True and abstract_val is True:
+            raise ValueError("schema cannot declare both x-gts-final and x-gts-abstract as true")
+
+        # Check that x-gts-final/x-gts-abstract/x-gts-traits/x-gts-traits-schema
+        # appear only at the top level
+        top_level_keywords = {"x-gts-final", "x-gts-abstract", "x-gts-traits", "x-gts-traits-schema"}
+        for key, value in content.items():
+            if key in top_level_keywords:
+                continue
+            for kw in top_level_keywords:
+                if _contains_key_recursive(value, kw):
+                    raise ValueError(f"{kw} must be at the schema top level")
+
+    @staticmethod
+    def _content_is_abstract(content: Dict[str, Any]) -> bool:
+        return content.get("x-gts-abstract") is True
+
+    @staticmethod
+    def _content_is_final(content: Dict[str, Any]) -> bool:
+        return content.get("x-gts-final") is True
+
+    def _validate_schema_chain(self, gts_id: str) -> None:
+        """Validate OP#12: schema derivation chain compatibility."""
+        gid = GtsID(gts_id)
+        segments = gid.gts_id_segments
+
+        # Single-segment schemas have no parent to validate against
+        if len(segments) < 2:
+            return
+
+        # Build chain IDs
+        chain_ids = []
+        prefix = "gts."
+        for seg in segments:
+            chain_ids.append(prefix + seg.segment)
+            prefix = prefix + seg.segment
+
+        # Validate each adjacent pair
+        for i in range(len(chain_ids) - 1):
+            base_id = chain_ids[i]
+            derived_id = chain_ids[i + 1]
+
+            # Check x-gts-final: if the base type is final, derivation is not allowed.
+            base_entity = self.get(base_id)
+            if base_entity and isinstance(base_entity.content, dict):
+                if base_entity.content.get("x-gts-final") is True:
+                    raise ValueError(
+                        f"base type '{base_id}' is final and cannot be extended"
+                    )
+
+            logging.info(f"OP#12: Validating schema chain pair: base={base_id} derived={derived_id}")
+
+            # Get both schemas
+            base_entity = self.get(base_id)
+            derived_entity = self.get(derived_id)
+
+            if not base_entity or not isinstance(base_entity.content, dict):
+                raise ValueError(f"Base schema '{base_id}' not found for chain validation")
+            if not derived_entity or not isinstance(derived_entity.content, dict):
+                raise ValueError(f"Derived schema '{derived_id}' not found for chain validation")
+
+            # Resolve both schemas (inline $refs)
+            base_resolved = self._resolve_schema_refs(base_entity.content)
+            derived_resolved = self._resolve_schema_refs(derived_entity.content)
+
+            # Validate derivation compatibility
+            errors = self._validate_derivation_compatibility(
+                base_resolved, derived_resolved, base_id, derived_id
+            )
+            if errors:
+                raise ValueError(
+                    f"Schema '{derived_id}' is not compatible with base '{base_id}': "
+                    + "; ".join(errors)
+                )
+
+    def _resolve_schema_refs(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve $ref references in a schema by inlining referenced schemas."""
+        import copy
+        result = copy.deepcopy(schema)
+        return self._inline_refs(result)
+
+    def _inline_refs(self, node: Any) -> Any:
+        """Recursively inline $ref references."""
+        if isinstance(node, dict):
+            if "$ref" in node and isinstance(node["$ref"], str):
+                ref_uri = node["$ref"]
+                # Only resolve gts:// refs
+                if ref_uri.startswith("gts://"):
+                    ref_id = ref_uri[6:]
+                    try:
+                        ref_schema = self.get_schema_content(ref_id)
+                        import copy
+                        return copy.deepcopy(ref_schema)
+                    except KeyError:
+                        pass  # Leave unresolved
+                elif not ref_uri.startswith("#"):
+                    # Try as plain GTS ID
+                    try:
+                        ref_schema = self.get_schema_content(ref_uri)
+                        import copy
+                        return copy.deepcopy(ref_schema)
+                    except KeyError:
+                        pass
+            return {k: self._inline_refs(v) for k, v in node.items()}
+        elif isinstance(node, list):
+            return [self._inline_refs(item) for item in node]
+        return node
+
+    def _validate_derivation_compatibility(
+        self,
+        base_schema: Dict[str, Any],
+        derived_schema: Dict[str, Any],
+        base_id: str,
+        derived_id: str,
+    ) -> List[str]:
+        """Validate that derived schema is compatible with base (OP#12).
+
+        Uses the "declared schema" approach from the Rust reference:
+        - base_decl = what the base declares (flattened)
+        - derived_decl = what the derived overlay declares (innermost branch wins)
+        Only the derived's own declarations are compared, not inherited ones.
+        """
+        errors: List[str] = []
+        base_decl = self._declared_schema(base_schema)
+        derived_decl = self._declared_schema(derived_schema)
+
+        # Inherit additionalProperties from base if derived doesn't declare it
+        base_ap = base_decl.get("additionalProperties")
+        if "additionalProperties" not in derived_decl and base_ap is not None:
+            derived_decl["additionalProperties"] = base_ap
+
+        # Check additionalProperties: derived cannot reopen a closed base
+        if base_ap is False:
+            derived_ap_raw = derived_schema.get("additionalProperties")
+            if derived_ap_raw is not None and derived_ap_raw is not False:
+                errors.append(
+                    f"derived schema '{derived_id}' loosens additionalProperties "
+                    f"from a closed constraint in base '{base_id}'"
+                )
+
+        # Compare declared properties
+        base_props = base_decl.get("properties", {})
+        derived_props = derived_decl.get("properties", {})
+
+        for prop_name, derived_prop in derived_props.items():
+            if not isinstance(derived_prop, dict):
+                continue
+            if prop_name not in base_props:
+                continue  # New property - allowed
+            base_prop = base_props[prop_name]
+            if not isinstance(base_prop, dict):
+                continue
+
+            prop_errors = self._check_property_derivation(
+                base_prop, derived_prop, prop_name, base_id, derived_id
+            )
+            errors.extend(prop_errors)
+
+        # Check required: derived declaring required is additive via allOf composition.
+        # An explicit empty required: [] means the derived explicitly drops all required.
+        # A non-empty required: ["x"] adds "x" to the inherited required set.
+        # The only violation is an explicit empty list when base has required fields.
+        derived_required_raw = derived_decl.get("required")
+        if derived_required_raw is not None:
+            base_required = set(base_decl.get("required", []))
+            if isinstance(derived_required_raw, list) and len(derived_required_raw) == 0 and base_required:
+                errors.append(
+                    f"derived schema '{derived_id}' is not included in base '{base_id}': "
+                    f"required fields removed: {sorted(base_required)}"
+                )
+
+        return errors
+
+    def _check_property_derivation(
+        self,
+        base_prop: Dict[str, Any],
+        derived_prop: Dict[str, Any],
+        prop_name: str,
+        base_id: str,
+        derived_id: str,
+    ) -> List[str]:
+        """Check if a derived property declaration is compatible with the base."""
+        errors: List[str] = []
+        prefix = f"derived schema '{derived_id}' is not included in base '{base_id}'"
+
+        # Type change check
+        base_type = base_prop.get("type")
+        derived_type = derived_prop.get("type")
+        if base_type and derived_type and base_type != derived_type:
+            if not (base_type == "integer" and derived_type == "number"):
+                errors.append(f"{prefix}: property '{prop_name}' type changed from '{base_type}' to '{derived_type}'")
+
+        # Const conflict
+        if "const" in base_prop and "const" in derived_prop:
+            if base_prop["const"] != derived_prop["const"]:
+                errors.append(f"{prefix}: property '{prop_name}' const conflict")
+
+        # Enum widening check
+        if "enum" in base_prop and "enum" in derived_prop:
+            base_enum = set(str(v) for v in base_prop["enum"])
+            derived_enum = set(str(v) for v in derived_prop["enum"])
+            if not derived_enum.issubset(base_enum):
+                errors.append(f"{prefix}: property '{prop_name}' enum widened")
+
+        # Constraint loosening checks
+        constraint_checks = [
+            ("minimum", lambda b, d: d < b),
+            ("maximum", lambda b, d: d > b),
+            ("minLength", lambda b, d: d < b),
+            ("maxLength", lambda b, d: d > b),
+            ("minItems", lambda b, d: d < b),
+            ("maxItems", lambda b, d: d > b),
+        ]
+        for kw, is_loosened in constraint_checks:
+            if kw in base_prop and kw in derived_prop:
+                try:
+                    if is_loosened(base_prop[kw], derived_prop[kw]):
+                        errors.append(f"{prefix}: property '{prop_name}' {kw} loosened")
+                except (TypeError, ValueError):
+                    pass
+
+        # Constraint dropped: only flag when the derived explicitly restates the
+        # property type (indicating a full redeclaration) and omits a base constraint.
+        # If the derived only adds NEW constraints, base constraints are inherited via $ref.
+        derived_has_type = "type" in derived_prop
+        constraint_keywords = [
+            "const", "enum", "pattern", "minimum", "maximum",
+            "minLength", "maxLength", "minItems", "maxItems", "items",
+        ]
+        if derived_has_type:
+            for kw in constraint_keywords:
+                if kw in base_prop and kw not in derived_prop:
+                    errors.append(f"{prefix}: property '{prop_name}' drops constraint '{kw}'")
+
+        # Pattern conflict
+        if "pattern" in base_prop and "pattern" in derived_prop:
+            if base_prop["pattern"] != derived_prop["pattern"]:
+                errors.append(f"{prefix}: property '{prop_name}' pattern changed")
+
+        return errors
+
+    @staticmethod
+    def _declared_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """Reduce a schema to what it *declares* (innermost branch wins).
+
+        allOf branches are folded in order; the last declaration of a property
+        replaces earlier ones. $ref branches are skipped (they are inherited,
+        not declared). additionalProperties uses closedness-preserving lattice.
+        """
+        result: Dict[str, Any] = {}
+        additional_properties = None
+
+        if "allOf" in schema and isinstance(schema["allOf"], list):
+            for branch in schema["allOf"]:
+                if isinstance(branch, dict):
+                    # Skip $ref-only branches (inherited, not declared)
+                    if "$ref" in branch and len(branch) <= 1:
+                        continue
+                    GtsStore._absorb_declaration(result, branch)
+                    if "additionalProperties" in branch:
+                        ap = branch["additionalProperties"]
+                        if additional_properties is None:
+                            additional_properties = ap
+                        elif ap is False:
+                            additional_properties = False
+
+        # Top-level properties override allOf
+        GtsStore._absorb_declaration(result, schema)
+        if "additionalProperties" in schema:
+            ap = schema["additionalProperties"]
+            if additional_properties is None:
+                additional_properties = ap
+            elif ap is False:
+                additional_properties = False
+
+        if additional_properties is not None:
+            result["additionalProperties"] = additional_properties
+
+        # Remove meta-keys
+        for k in ("allOf", "$id", "$schema", "$ref", "x-gts-final", "x-gts-abstract",
+                   "x-gts-traits", "x-gts-traits-schema"):
+            result.pop(k, None)
+
+        return result
+
+    @staticmethod
+    def _absorb_declaration(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+        """Merge source declarations into target (last-wins for properties)."""
+        for key, value in source.items():
+            if key in ("allOf", "$ref", "additionalProperties"):
+                continue
+            if key == "properties" and isinstance(value, dict):
+                if "properties" not in target:
+                    target["properties"] = {}
+                target["properties"].update(value)
+            elif key == "required" and isinstance(value, list):
+                target["required"] = value
+            else:
+                target[key] = value
+
+    def _effective_traits(self, gts_id: str) -> Tuple[Dict[str, Any], Dict[str, Any], bool]:
+        """Build effective traits for a type by walking its chain.
+
+        Returns:
+            (effective_traits_schema, effective_traits_values, has_schema)
+        """
+        import copy
+
+        gid = GtsID(gts_id)
+        segments = gid.gts_id_segments
+
+        # Build chain IDs
+        chain_ids: List[str] = []
+        prefix = "gts."
+        for seg in segments:
+            chain_ids.append(prefix + seg.segment)
+            prefix = prefix + seg.segment
+
+        trait_schemas: List[Dict[str, Any]] = []
+        merged_traits: Dict[str, Any] = {}
+
+        for schema_id in chain_ids:
+            entity = self.get(schema_id)
+            if not entity or not isinstance(entity.content, dict):
+                continue
+
+            content = entity.content
+
+            # Collect x-gts-traits-schema
+            ts = content.get("x-gts-traits-schema")
+            if ts is not None:
+                if isinstance(ts, dict):
+                    trait_schemas.append(copy.deepcopy(ts))
+                elif ts is True:
+                    trait_schemas.append({})  # unconstrained
+                elif ts is False:
+                    trait_schemas.append(False)
+
+            # Collect x-gts-traits and merge via RFC 7396
+            tv = content.get("x-gts-traits")
+            if isinstance(tv, dict):
+                self._json_merge_patch(merged_traits, tv)
+
+        # Compose effective trait schema
+        if not trait_schemas:
+            return {}, merged_traits, False
+
+        # Filter out False schemas
+        has_false = False in trait_schemas
+        valid_schemas = [s for s in trait_schemas if s is not False and isinstance(s, dict)]
+
+        if has_false and not valid_schemas:
+            # All schemas are false
+            effective_schema = {"not": {}}
+        elif len(valid_schemas) == 1:
+            effective_schema = valid_schemas[0]
+        elif valid_schemas:
+            # Compose via allOf
+            effective_schema = {"allOf": valid_schemas}
+        else:
+            effective_schema = {}
+
+        # Materialize defaults from schema
+        if isinstance(effective_schema, dict):
+            self._materialize_trait_defaults(effective_schema, merged_traits)
+
+        return effective_schema, merged_traits, True
+
+    @staticmethod
+    def _json_merge_patch(target: Dict[str, Any], patch: Dict[str, Any]) -> None:
+        """Apply RFC 7396 JSON Merge Patch to target."""
+        for key, value in patch.items():
+            if value is None:
+                target.pop(key, None)
+            elif isinstance(value, dict) and isinstance(target.get(key), dict):
+                GtsStore._json_merge_patch(target[key], value)
+            else:
+                import copy
+                target[key] = copy.deepcopy(value)
+
+    @staticmethod
+    def _materialize_trait_defaults(schema: Dict[str, Any], traits: Dict[str, Any]) -> None:
+        """Fill absent trait properties with const or default values from schema."""
+        props = schema.get("properties", {})
+        if not isinstance(props, dict):
+            return
+        for prop_name, prop_schema in props.items():
+            if prop_name in traits:
+                continue
+            if not isinstance(prop_schema, dict):
+                continue
+            # const takes precedence
+            if "const" in prop_schema:
+                traits[prop_name] = prop_schema["const"]
+            elif "default" in prop_schema:
+                traits[prop_name] = prop_schema["default"]
+
+    def _validate_traits(self, gts_id: str, is_abstract: bool) -> None:
+        """Validate OP#13: schema traits for a type."""
+        effective_schema, effective_values, has_schema = self._effective_traits(gts_id)
+
+        if not has_schema:
+            # No trait schema defined in the chain - nothing to validate
+            return
+
+        # If values exist but no schema, that's an error
+        if effective_values and not has_schema:
+            raise ValueError(
+                f"Schema '{gts_id}' has x-gts-traits but no x-gts-traits-schema in chain"
+            )
+
+        # Validate values against schema
+        if effective_values and isinstance(effective_schema, dict) and effective_schema:
+            try:
+                from jsonschema import validate as js_val, Draft7Validator
+                # Flatten allOf for validation
+                if "allOf" in effective_schema:
+                    flat = {}
+                    for branch in effective_schema["allOf"]:
+                        if isinstance(branch, dict):
+                            for k, v in branch.items():
+                                if k == "properties" and isinstance(v, dict):
+                                    if "properties" not in flat:
+                                        flat["properties"] = {}
+                                    flat["properties"].update(v)
+                                elif k == "required" and isinstance(v, list):
+                                    if "required" not in flat:
+                                        flat["required"] = []
+                                    flat["required"].extend(v)
+                                elif k == "additionalProperties":
+                                    flat[k] = v
+                                else:
+                                    flat[k] = v
+                    effective_schema_flat = flat
+                else:
+                    effective_schema_flat = effective_schema
+
+                # Add "type": "object" if not present
+                if "type" not in effective_schema_flat:
+                    effective_schema_flat["type"] = "object"
+
+                js_val(instance=effective_values, schema=effective_schema_flat)
+            except Exception as e:
+                raise ValueError(
+                    f"Schema '{gts_id}' trait validation failed: {str(e)}"
+                )
+
+        # Check completeness: all required traits must be present (unless abstract)
+        if not is_abstract and isinstance(effective_schema, dict):
+            schema_to_check = effective_schema
+            if "allOf" in schema_to_check:
+                # Flatten for required check
+                all_required: List[str] = []
+                for branch in schema_to_check["allOf"]:
+                    if isinstance(branch, dict):
+                        all_required.extend(branch.get("required", []))
+                required = set(all_required)
+            else:
+                required = set(schema_to_check.get("required", []))
+
+            missing = required - set(effective_values.keys())
+            if missing:
+                raise ValueError(
+                    f"Schema '{gts_id}' trait validation failed: "
+                    f"missing required traits: {sorted(missing)}"
+                )
+
+    def validate_schema_basic(self, gts_id: str) -> None:
+        """Basic schema validation during registration (no chain validation).
+
+        Checks:
+        1. $ref URI format
+        2. x-gts-ref field validation
+        3. GTS keyword validation (x-gts-final, x-gts-abstract, placement)
+        4. JSON Schema meta-schema validation
+        """
+        if not gts_id.endswith("~"):
+            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
+
+        schema_entity = self.get(gts_id)
+        if not schema_entity:
+            raise StoreGtsSchemaNotFound(gts_id)
+
+        if not schema_entity.is_schema:
+            raise ValueError(f"Entity '{gts_id}' is not a schema")
+
+        schema_content = schema_entity.content
+        if not isinstance(schema_content, dict):
+            raise ValueError(f"Schema '{gts_id}' content must be a dictionary")
+
+        meta_schema_url = schema_content.get("$schema")
+        if meta_schema_url and isinstance(meta_schema_url, str):
+            if meta_schema_url.startswith("gts.") or meta_schema_url.startswith("gts://"):
+                raise ValueError(
+                    f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
+                )
+
+        # 1. Validate $ref fields
+        self._validate_schema_refs(schema_content, "")
+
+        # 2. Validate x-gts-ref fields
+        self._validate_schema_x_gts_refs(gts_id)
+
+        # 3. Validate GTS keywords (x-gts-final, x-gts-abstract, placement)
+        self._validate_gts_keywords(schema_content)
+
     def validate_schema(self, gts_id: str) -> None:
         """
         Full schema validation including:
         1. JSON Schema meta-schema validation
         2. x-gts-ref field validation
+        3. GTS keyword validation (x-gts-final, x-gts-abstract, placement)
+        4. Schema chain derivation validation (OP#12)
 
         Args:
             gts_id: The GTS ID of the schema to validate
@@ -334,28 +868,35 @@ class GtsStore:
         logging.info(f"Validating schema {gts_id}")
 
         # 1. Validate $ref fields - must be local (#...) or gts:// URIs
-        # Issue #32: This validation must happen first to enforce strict $ref format
         self._validate_schema_refs(schema_content, "")
 
-        # 2. Validate x-gts-ref fields (before JSON Schema validation)
+        # 2. Validate x-gts-ref fields
         self._validate_schema_x_gts_refs(gts_id)
 
-        # 3. Validate against JSON Schema meta-schema
+        # 3. Validate GTS keywords (x-gts-final, x-gts-abstract, placement)
+        self._validate_gts_keywords(schema_content)
+
+        # 4. Validate schema derivation chain (OP#12)
+        self._validate_schema_chain(gts_id)
+
+        # 5. Validate against JSON Schema meta-schema
         try:
             from jsonschema import Draft7Validator
             from jsonschema.validators import validator_for
 
             if meta_schema_url:
-                # Use the appropriate validator for the schema version
                 validator_class = validator_for({"$schema": meta_schema_url})
                 validator_class.check_schema(schema_content)
             else:
-                # Default to Draft7 if no $schema specified
                 Draft7Validator.check_schema(schema_content)
 
             logging.info(f"Schema {gts_id} passed JSON Schema meta-schema validation")
         except Exception as e:
             raise Exception(f"JSON Schema validation failed for '{gts_id}': {str(e)}")
+
+        # 6. Validate traits (OP#13)
+        is_abstract = self._content_is_abstract(schema_content)
+        self._validate_traits(gts_id, is_abstract)
 
     def validate_instance(
         self,
@@ -372,14 +913,20 @@ class GtsStore:
         obj = self.get(gid.id)
         if not obj:
             raise StoreGtsObjectNotFound(gts_id)
-        if not obj.schemaId:
+        if not obj.type_id:
             raise StoreGtsSchemaForInstanceNotFound(gid.id)
         try:
-            schema = self.get_schema_content(obj.schemaId)
+            schema = self.get_schema_content(obj.type_id)
         except KeyError:
-            raise StoreGtsSchemaNotFound(obj.schemaId)
+            raise StoreGtsSchemaNotFound(obj.type_id)
 
-        logging.info(f"Validating instance {gts_id} against schema {obj.schemaId}")
+        logging.info(f"Validating instance {gts_id} against schema {obj.type_id}")
+
+        # Check if the schema is abstract - abstract types cannot have direct instances
+        if isinstance(schema, dict) and self._content_is_abstract(schema):
+            raise ValueError(
+                f"type '{obj.type_id}' is abstract and cannot have direct instances"
+            )
 
         # Create custom RefResolver to resolve GTS ID references
         resolver = self._create_ref_resolver(schema)
@@ -415,7 +962,7 @@ class GtsStore:
             from_schema = from_entity
             from_schema_id = from_entity.gts_id.id
         else:
-            from_schema_id = from_entity.schemaId
+            from_schema_id = from_entity.type_id
             if not from_schema_id:
                 raise StoreGtsSchemaForInstanceNotFound(from_id)
             from_schema = self.get(from_schema_id)
@@ -516,11 +1063,11 @@ class GtsStore:
                     refs[r["sourcePath"]] = gts2node(r["id"], seen_gts_ids)
                 if refs:
                     ret["refs"] = refs
-                if entity.schemaId:
-                    if not entity.schemaId.startswith(
+                if entity.type_id:
+                    if not entity.type_id.startswith(
                         "http://json-schema.org"
-                    ) and not entity.schemaId.startswith("https://json-schema.org"):
-                        ret["schema_id"] = gts2node(entity.schemaId, seen_gts_ids)
+                    ) and not entity.type_id.startswith("https://json-schema.org"):
+                        ret["schema_id"] = gts2node(entity.type_id, seen_gts_ids)
                 else:
                     ret["errors"] = ret.get("errors", []) + ["Schema not recognized"]
             else:

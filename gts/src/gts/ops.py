@@ -23,15 +23,20 @@ class GtsIdValidationResult:
     id: str
     valid: bool
     error: str = ""
+    is_type: Optional[bool] = None
     is_wildcard: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "id": self.id,
             "valid": self.valid,
-            "error": self.error,
             "is_wildcard": self.is_wildcard,
         }
+        if self.error:
+            d["error"] = self.error
+        if self.is_type is not None:
+            d["is_type"] = self.is_type
+        return d
 
 
 @dataclass
@@ -66,18 +71,21 @@ class GtsIdParseResult:
     ok: bool
     segments: List[GtsIdSegment] = field(default_factory=list)
     error: str = ""
+    is_type: Optional[bool] = None
     is_wildcard: bool = False
-    is_schema: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "id": self.id,
             "ok": self.ok,
             "segments": [s.to_dict() for s in self.segments],
-            "error": self.error,
             "is_wildcard": self.is_wildcard,
-            "is_schema": self.is_schema,
         }
+        if self.error:
+            d["error"] = self.error
+        if self.is_type is not None:
+            d["is_type"] = self.is_type
+        return d
 
 
 @dataclass
@@ -127,6 +135,24 @@ class GtsValidationResult:
 
 
 @dataclass
+class GtsEntityValidationResult:
+    """Result of validating an entity (instance or type schema)."""
+
+    id: str
+    ok: bool
+    entity_type: str = ""
+    error: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"id": self.id, "ok": self.ok}
+        if self.entity_type:
+            result["entity_type"] = self.entity_type
+        if self.error:
+            result["error"] = self.error
+        return result
+
+
+@dataclass
 class GtsSchemaGraphResult:
     """Result of building a schema graph for an entity."""
 
@@ -141,14 +167,14 @@ class GtsEntityInfo:
     """Information about a single entity."""
 
     id: str
-    schema_id: Optional[str]
-    is_schema: bool
+    type_id: Optional[str]
+    is_type_schema: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
-            "schema_id": self.schema_id,
-            "is_schema": self.is_schema,
+            "type_id": self.type_id,
+            "is_type_schema": self.is_type_schema,
         }
 
 
@@ -158,8 +184,8 @@ class GtsGetEntityResult:
 
     ok: bool
     id: str = ""
-    schema_id: Optional[str] = None
-    is_schema: bool = False
+    type_id: Optional[str] = None
+    is_type_schema: bool = False
     content: Any = None
     error: str = ""
 
@@ -167,8 +193,8 @@ class GtsGetEntityResult:
         result: Dict[str, Any] = {"ok": self.ok}
         if self.ok:
             result["id"] = self.id
-            result["schema_id"] = self.schema_id
-            result["is_schema"] = self.is_schema
+            result["type_id"] = self.type_id
+            result["is_type_schema"] = self.is_type_schema
             result["content"] = self.content
         else:
             result["error"] = self.error
@@ -197,19 +223,19 @@ class GtsAddEntityResult:
 
     ok: bool
     id: str = ""
-    schema_id: Optional[str] = None
-    is_schema: bool = False
+    type_id: Optional[str] = None
+    is_type_schema: bool = False
     error: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {"ok": self.ok}
         if self.ok:
             result["id"] = self.id
-            result["schema_id"] = self.schema_id
-            result["is_schema"] = self.is_schema
+            result["type_id"] = self.type_id
+            result["is_type_schema"] = self.is_type_schema
         else:
             result["error"] = self.error
-            result["is_schema"] = self.is_schema
+            result["is_type_schema"] = self.is_type_schema
         return result
 
 
@@ -249,18 +275,18 @@ class GtsExtractIdResult:
     """Result of extracting ID information from content."""
 
     id: str
-    schema_id: Optional[str]
+    type_id: Optional[str]
     selected_entity_field: Optional[str]
-    selected_schema_id_field: Optional[str]
-    is_schema: bool
+    selected_type_id_field: Optional[str]
+    is_type_schema: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
-            "schema_id": self.schema_id,
+            "type_id": self.type_id,
             "selected_entity_field": self.selected_entity_field,
-            "selected_schema_id_field": self.selected_schema_id_field,
-            "is_schema": self.is_schema,
+            "selected_type_id_field": self.selected_type_id_field,
+            "is_type_schema": self.is_type_schema,
         }
 
 
@@ -332,7 +358,7 @@ class GtsOps:
             # Instance must have an id from entity_id_fields (not just derived from schema)
             if not entity.raw_id or not entity.selected_entity_field:
                 return GtsAddEntityResult(
-                    ok=False, error="Instance must have an id field", is_schema=False
+                    ok=False, error="Instance must have an id field", is_type_schema=False
                 )
 
         # Schemas MUST have a valid GTS ID
@@ -350,16 +376,16 @@ class GtsOps:
                     return GtsAddEntityResult(
                         ok=False,
                         error="Schema $id must use gts:// URI format, not plain gts. prefix",
-                        is_schema=True,
+                        is_type_schema=True,
                     )
 
         # Register the entity (use raw_id for non-GTS instances)
         self.store.register(entity)
 
-        # Always validate schemas
+        # Validate schema structure (basic checks only, not full chain validation)
         if entity.is_schema:
             try:
-                self.store.validate_schema(entity.gts_id.id)
+                self.store.validate_schema_basic(entity.gts_id.id)
             except Exception as e:
                 return GtsAddEntityResult(
                     ok=False, error=f"Validation failed: {str(e)}"
@@ -379,8 +405,8 @@ class GtsOps:
         return GtsAddEntityResult(
             ok=True,
             id=entity_id,
-            schema_id=entity.schemaId,
-            is_schema=entity.is_schema,
+            type_id=entity.type_id,
+            is_type_schema=entity.is_schema,
         )
 
     def add_entities(self, items: List[Dict[str, Any]]) -> GtsAddEntitiesResult:
@@ -404,12 +430,17 @@ class GtsOps:
             if is_wildcard:
                 # For wildcards, try parsing as GtsWildcard
                 _ = GtsWildcard(gts_id)
+                return GtsIdValidationResult(
+                    id=gts_id, valid=True, is_type=False, is_wildcard=True
+                )
             else:
-                _ = GtsID(gts_id)
-            return GtsIdValidationResult(id=gts_id, valid=True, is_wildcard=is_wildcard)
+                parsed = GtsID(gts_id)
+                return GtsIdValidationResult(
+                    id=gts_id, valid=True, is_type=parsed.is_type, is_wildcard=False
+                )
         except Exception as e:
             return GtsIdValidationResult(
-                id=gts_id, valid=False, error=str(e), is_wildcard=is_wildcard
+                id=gts_id, valid=False, error=str(e), is_type=None, is_wildcard=is_wildcard
             )
 
     def parse_id(self, gts_id: str) -> GtsIdParseResult:
@@ -418,33 +449,51 @@ class GtsOps:
         try:
             if is_wildcard:
                 parsed = GtsWildcard(gts_id)
+                segs = parsed.gts_id_segments
+                segments = [
+                    GtsIdSegment(
+                        vendor=s.vendor,
+                        package=s.package,
+                        namespace=s.namespace,
+                        type=s.type,
+                        ver_major=s.ver_major,
+                        ver_minor=s.ver_minor,
+                        is_type=s.is_type,
+                    )
+                    for s in segs
+                ]
+                return GtsIdParseResult(
+                    id=gts_id,
+                    ok=True,
+                    segments=segments,
+                    is_type=False,
+                    is_wildcard=True,
+                )
             else:
                 parsed = GtsID(gts_id)
-            segs = parsed.gts_id_segments
-            segments = [
-                GtsIdSegment(
-                    vendor=s.vendor,
-                    package=s.package,
-                    namespace=s.namespace,
-                    type=s.type,
-                    ver_major=s.ver_major,
-                    ver_minor=s.ver_minor,
-                    is_type=s.is_type,
+                segs = parsed.gts_id_segments
+                segments = [
+                    GtsIdSegment(
+                        vendor=s.vendor,
+                        package=s.package,
+                        namespace=s.namespace,
+                        type=s.type,
+                        ver_major=s.ver_major,
+                        ver_minor=s.ver_minor,
+                        is_type=s.is_type,
+                    )
+                    for s in segs
+                ]
+                return GtsIdParseResult(
+                    id=gts_id,
+                    ok=True,
+                    segments=segments,
+                    is_type=parsed.is_type,
+                    is_wildcard=False,
                 )
-                for s in segs
-            ]
-            # is_schema: true if ends with ~ and not a wildcard ending with ~*
-            is_schema = gts_id.endswith("~") and not is_wildcard
-            return GtsIdParseResult(
-                id=gts_id,
-                ok=True,
-                segments=segments,
-                is_wildcard=is_wildcard,
-                is_schema=is_schema,
-            )
         except Exception as e:
             return GtsIdParseResult(
-                id=gts_id, ok=False, error=str(e), is_wildcard=is_wildcard
+                id=gts_id, ok=False, error=str(e), is_type=None, is_wildcard=is_wildcard
             )
 
     def match_id_pattern(self, candidate: str, pattern: str) -> GtsIdMatchResult:
@@ -481,15 +530,22 @@ class GtsOps:
         except Exception as e:
             return GtsValidationResult(id=gts_id, ok=False, error=str(e))
 
-    def validate_entity(self, gts_id: str) -> GtsValidationResult:
+    def validate_entity(self, gts_id: str) -> "GtsEntityValidationResult":
         try:
-            if gts_id.endswith("~"):
-                self.store.validate_schema(gts_id)
-            else:
-                self.store.validate_instance(gts_id)
-            return GtsValidationResult(id=gts_id, ok=True)
+            parsed = GtsID(gts_id)
         except Exception as e:
-            return GtsValidationResult(id=gts_id, ok=False, error=str(e))
+            return GtsEntityValidationResult(id=gts_id, ok=False, entity_type="", error=str(e))
+
+        if parsed.is_type:
+            entity_type = "schema"
+            result = self.validate_schema(gts_id)
+        else:
+            entity_type = "instance"
+            result = self.validate_instance(gts_id)
+
+        return GtsEntityValidationResult(
+            id=result.id, ok=result.ok, entity_type=entity_type, error=result.error
+        )
 
     def schema_graph(self, gts_id: str) -> GtsSchemaGraphResult:
         graph = self.store.build_schema_graph(gts_id)
@@ -524,16 +580,17 @@ class GtsOps:
 
     def extract_id(self, content: Dict[str, Any]) -> GtsExtractIdResult:
         entity = GtsEntity(content=content, cfg=self.cfg)
-        # Always use raw_id - that's the actual value found in the entity_id_fields
-        # Note: gts_id may be derived from schemaId as fallback, but extract-id
-        # should return what was actually in the selected field
-        id_value = entity.raw_id or ""
+        # Use effective_id: raw_id for non-schemas, gts_id for schemas
+        if entity.is_schema:
+            id_value = entity.gts_id.id if entity.gts_id else (entity.raw_id or "")
+        else:
+            id_value = entity.raw_id or ""
         return GtsExtractIdResult(
             id=id_value,
-            schema_id=entity.schemaId,
+            type_id=entity.type_id,
             selected_entity_field=entity.selected_entity_field,
-            selected_schema_id_field=entity.selected_schema_id_field,
-            is_schema=entity.is_schema,
+            selected_type_id_field=entity.selected_type_id_field,
+            is_type_schema=entity.is_schema,
         )
 
     def get_entity(self, gts_id: str) -> GtsGetEntityResult:
@@ -554,8 +611,8 @@ class GtsOps:
             return GtsGetEntityResult(
                 ok=True,
                 id=entity.gts_id.id if entity.gts_id else gts_id,
-                schema_id=entity.schemaId,
-                is_schema=entity.is_schema,
+                type_id=entity.type_id,
+                is_type_schema=entity.is_schema,
                 content=entity.content,
             )
         except Exception as e:
@@ -575,8 +632,8 @@ class GtsOps:
         entities = [
             GtsEntityInfo(
                 id=entity_id,
-                schema_id=entity.schemaId,
-                is_schema=entity.is_schema,
+                type_id=entity.type_id,
+                is_type_schema=entity.is_schema,
             )
             for entity_id, entity in all_entities[:limit]
         ]

@@ -175,9 +175,9 @@ class TestGtsEntity:
             cfg=DEFAULT_GTS_CONFIG,
         )
 
-        # Issue #25: $schema is no longer used for schema_id, use 'type' field instead
-        assert entity.schemaId == "gts.vendor.package.namespace.type.v1~"
-        assert entity.selected_schema_id_field == "type"
+        # Issue #25: $schema is no longer used for type_id, use 'type' field instead
+        assert entity.type_id == "gts.vendor.package.namespace.type.v1~"
+        assert entity.selected_type_id_field == "type"
 
     def test_entity_label_from_file(self):
         """Test entity label derived from file."""
@@ -330,7 +330,7 @@ class TestGtsEntityGetGraph:
                 "ref": "gts.vendor.package.namespace.other.v1~",
             },
             gts_id=gts_id,
-            schemaId="gts.vendor.package.namespace.type.v1~",
+            type_id="gts.vendor.package.namespace.type.v1~",
         )
 
         graph = entity.get_graph()

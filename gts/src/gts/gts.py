@@ -9,6 +9,9 @@ GTS_PREFIX = "gts."
 GTS_URI_PREFIX = "gts://"
 GTS_NS = uuid.uuid5(uuid.NAMESPACE_URL, "gts")
 GTS_SEGMENT_TOKEN_REGEX = re.compile(r"^[a-z_][a-z0-9_]*$")
+UUID_REGEX = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class GtsInvalidSegment(ValueError):
@@ -167,6 +170,24 @@ class GtsIdSegment:
                     num, offset, segment, "Minor version must be an integer"
                 )
 
+    @classmethod
+    def _uuid_tail_segment(cls, num: int, offset: int, uuid_str: str) -> "GtsIdSegment":
+        """Create a special UUID tail segment for combined anonymous instances."""
+        seg = object.__new__(cls)
+        seg.num = num
+        seg.offset = offset
+        seg.segment = uuid_str
+        seg.vendor = ""
+        seg.package = ""
+        seg.namespace = ""
+        seg.type = ""
+        seg.ver_major = None
+        seg.ver_minor = None
+        seg.is_type = False
+        seg.is_wildcard = False
+        seg._is_uuid_tail = True
+        return seg
+
 
 class GtsID:
     def __init__(self, id: str):
@@ -180,9 +201,6 @@ class GtsID:
         if raw != raw.lower():
             raise GtsInvalidId(id, "Must be lower case")
 
-        if "-" in raw:
-            raise GtsInvalidId(id, "Must not contain '-'")
-
         if not raw.startswith(GTS_PREFIX):
             raise GtsInvalidId(id, f"Does not start with '{GTS_PREFIX}'")
         if len(raw) > 1024:
@@ -190,17 +208,45 @@ class GtsID:
 
         self.id: str = raw
         self.gts_id_segments: List[GtsIdSegment] = []
+        self.uuid_tail: Optional[str] = None
+
+        # Detect combined anonymous instance: last tilde-part is a UUID
+        remainder = raw[len(GTS_PREFIX):]
+        tilde_parts = remainder.split("~")
+        last_part = tilde_parts[-1] if tilde_parts else ""
+        if UUID_REGEX.match(last_part) and len(tilde_parts) >= 2:
+            self.uuid_tail = last_part
+            # Hyphens are only allowed in the UUID tail
+            segments_portion = raw[: len(raw) - len(last_part) - 1]  # strip ~<uuid>
+            if "-" in segments_portion:
+                raise GtsInvalidId(id, "Must not contain '-'")
+        else:
+            if "-" in raw:
+                raise GtsInvalidId(id, "Must not contain '-'")
 
         # split preserving empties to detect trailing '~'
         _parts = raw[len(GTS_PREFIX) :].split("~")
-        parts = []
-        for i in range(0, len(_parts)):
-            if i < len(_parts) - 1:
+
+        # If UUID tail, exclude it from segment parsing
+        if self.uuid_tail:
+            # All parts before UUID are type segments (end with ~)
+            seg_count = len(_parts) - 1  # exclude UUID tail
+            parts = []
+            for i in range(seg_count):
+                if _parts[i] == "":
+                    raise GtsInvalidId(
+                        id, f"GTS segment #{i + 1} is empty"
+                    )
                 parts.append(_parts[i] + "~")
-                if i == len(_parts) - 2 and _parts[i + 1] == "":
-                    break
-            else:
-                parts.append(_parts[i])
+        else:
+            parts = []
+            for i in range(0, len(_parts)):
+                if i < len(_parts) - 1:
+                    parts.append(_parts[i] + "~")
+                    if i == len(_parts) - 2 and _parts[i + 1] == "":
+                        break
+                else:
+                    parts.append(_parts[i])
 
         offset = len(GTS_PREFIX)
         for i in range(0, len(parts)):
@@ -212,9 +258,17 @@ class GtsID:
             self.gts_id_segments.append(GtsIdSegment(i + 1, offset, parts[i]))
             offset += len(parts[i])
 
+        # Add UUID tail as a special segment if present
+        if self.uuid_tail:
+            self.gts_id_segments.append(
+                GtsIdSegment._uuid_tail_segment(len(self.gts_id_segments) + 1, offset, self.uuid_tail)
+            )
+
         # Issue #37: Single-segment instance IDs are not allowed
         # An instance ID (not ending with ~) must be chained (have at least 2 segments)
-        if not self.id.endswith("~") and len(self.gts_id_segments) == 1:
+        # UUID tail is exempt
+        non_uuid_segments = [s for s in self.gts_id_segments if not getattr(s, '_is_uuid_tail', False)]
+        if not self.id.endswith("~") and self.uuid_tail is None and len(non_uuid_segments) == 1:
             # Check if it's a wildcard (wildcards are allowed as single segment)
             if not any(seg.is_wildcard for seg in self.gts_id_segments):
                 raise GtsInvalidId(
@@ -233,6 +287,9 @@ class GtsID:
         return GTS_PREFIX + "".join([s.segment for s in self.gts_id_segments[:-1]])
 
     def to_uuid(self) -> uuid.UUID:
+        # For combined anonymous instances, return the embedded UUID directly
+        if self.uuid_tail:
+            return uuid.UUID(self.uuid_tail)
         return uuid.uuid5(GTS_NS, self.id)
 
     @classmethod

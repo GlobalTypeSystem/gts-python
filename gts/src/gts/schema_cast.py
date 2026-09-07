@@ -47,6 +47,9 @@ class GtsEntityCastResult:
             self.forward_errors = []
 
     def to_dict(self) -> Dict[str, Any]:
+        def _compat_str(val: bool) -> str:
+            return "compatible" if val else "incompatible"
+
         result = {
             "from": self.from_id,
             "to": self.to_id,
@@ -56,6 +59,9 @@ class GtsEntityCastResult:
             "added_properties": self.added_properties,
             "removed_properties": self.removed_properties,
             "changed_properties": self.changed_properties,
+            "backward_compatibility": _compat_str(self.is_backward_compatible),
+            "forward_compatibility": _compat_str(self.is_forward_compatible),
+            "full_compatibility": _compat_str(self.is_fully_compatible),
             "is_fully_compatible": self.is_fully_compatible,
             "is_backward_compatible": self.is_backward_compatible,
             "is_forward_compatible": self.is_forward_compatible,
