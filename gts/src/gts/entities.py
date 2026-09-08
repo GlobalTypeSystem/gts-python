@@ -378,25 +378,6 @@ class GtsEntity:
         # No schema reference found for instance
         return None
 
-    def _extract_uuid_from_content(self) -> Optional[str]:
-        """Extract a UUID value from content to use as instance identifier."""
-        if not isinstance(self.content, dict):
-            return None
-        # Look for common UUID fields
-        for field_name in ["id", "uuid", "instanceId", "instance_id"]:
-            val = self.content.get(field_name)
-            if isinstance(val, str) and val.strip():
-                # Check if it looks like a UUID (basic check)
-                import re
-
-                if re.match(
-                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                    val.lower(),
-                ):
-                    # Convert UUID to a valid GTS segment format
-                    return val.replace("-", "_")
-        return None
-
     def get_graph(self) -> Dict[str, Set[str]]:
         refs = {}
         for r in self.gts_refs:

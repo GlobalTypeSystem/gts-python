@@ -18,7 +18,7 @@ sys.path.insert(0, _src)
 for _key in [k for k in sys.modules if k == "gts" or k.startswith("gts.")]:
     del sys.modules[_key]
 
-from gts.cli import main  # noqa: E402
+from gts._cli import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

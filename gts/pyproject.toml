@@ -24,7 +24,7 @@ Homepage = "https://github.com/globaltypesystem"
 Repository = "https://github.com/globaltypesystem/gts-python"
 
 [project.scripts]
-gts = "gts.cli:main"
+gts = "gts._cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gts"]

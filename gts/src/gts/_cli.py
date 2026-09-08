@@ -7,7 +7,7 @@ import sys
 from typing import List
 
 from .ops import GtsOps
-from .server import GtsHttpServer
+from ._server import GtsHttpServer
 
 
 def build_parser() -> argparse.ArgumentParser:

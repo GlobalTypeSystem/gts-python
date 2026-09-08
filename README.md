@@ -41,11 +41,11 @@ Other GTS spec [Reference Implementation](https://github.com/globaltypesystem/gt
 
 Technical Backlog:
 
-- [ ] **Code coverage** - target is 90%
-- [ ] **Documentation** - add documentation for all the features
-- [ ] **Interface** - export publicly available interface and keep cli and others private
-- [ ] **Server API** - finalise the server API
-- [ ] **Final code cleanup** - remove unused code, denormalize, add critical comments, etc.
+- [x] **Code coverage** - target is 90%
+- [x] **Documentation** - add documentation for all the features
+- [x] **Interface** - export publicly available interface and keep cli and others private
+- [x] **Server API** - finalise the server API
+- [x] **Final code cleanup** - remove unused code, denormalize, add critical comments, etc.
 
 ## Installation
 

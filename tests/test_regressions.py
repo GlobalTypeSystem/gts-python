@@ -6,7 +6,7 @@ from jsonschema import ValidationError
 from gts.compatibility import INCOMPATIBLE, check_backward_compatibility
 from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
 from gts.ops import GtsOps
-from gts.server import ValidateEntityRequest
+from gts._server import ValidateEntityRequest
 from gts.store import GtsStore
 from gts.traits import build_effective_traits
 from gts.x_gts_ref import XGtsRefValidator

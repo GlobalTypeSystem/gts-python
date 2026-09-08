@@ -80,6 +80,7 @@ test: install
 
 # Measure code coverage
 coverage: install
+	$(PYTHON) -m pip install 'pytest-cov>=5,<7'
 	$(PYTHON) -m pytest tests/ --cov=gts --cov-report=xml --cov-report=term
 
 # Run end-to-end tests against gts-spec

@@ -253,11 +253,11 @@ Start a local server:
 gts --path schemas server --host 127.0.0.1 --port 8000
 ```
 
-`GtsHttpServer` is available from `gts.server` when embedding the application:
+`GtsHttpServer` is an internal implementation detail (module `gts._server`) backing the `gts server` CLI command. It is not part of the public API and may change without notice; embed it at your own risk:
 
 ```python
 from gts.ops import GtsOps
-from gts.server import GtsHttpServer
+from gts._server import GtsHttpServer  # internal, not a stable API
 
 app = GtsHttpServer(ops=GtsOps()).app
 ```
