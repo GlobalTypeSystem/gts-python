@@ -12,7 +12,13 @@ endif
 PY_ENV_STAMP := $(PY_ENV_DIR)/.stamp
 INSTALL_STAMP := $(PY_ENV_DIR)/.install-stamp
 
-.PHONY: help py-env install build clean dev-fmt all check fmt lint clippy mypy test security update-spec e2e coverage
+ifneq ($(filter install-local uninstall-local,$(MAKECMDGOALS)),)
+ifeq ($(origin PYTHON),file)
+$(error PYTHON must be set for local package targets (examples: venv: PYTHON=.venv/bin/python3.13 make install-local; global: PYTHON=python3.13 make install-local))
+endif
+endif
+
+.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec e2e coverage
 
 # Default target - show help
 .DEFAULT_GOAL := help
@@ -41,10 +47,19 @@ $(INSTALL_STAMP): $(PY_ENV_STAMP) gts/pyproject.toml
 	$(PYTHON) -m pip install -e ./gts
 	@touch $@
 
-# Build distributable wheel into dist/
+# Build source and wheel distributions into dist/
 build: py-env
 	$(PYTHON) -m pip install --upgrade build
-	$(PYTHON) -m build ./gts
+	$(PYTHON) -m build --outdir dist ./gts
+
+# Install the locally built wheel, equivalent to installing the published gts package
+install-local: build
+	$(PYTHON) -m pip install --force-reinstall dist/gts-*.whl
+
+# Uninstall gts from the selected interpreter
+uninstall-local:
+	$(PYTHON) -m pip uninstall --yes gts
+	@rm -f $(INSTALL_STAMP)
 
 # Remove venv and build artifacts
 clean:

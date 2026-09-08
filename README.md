@@ -49,12 +49,32 @@ Technical Backlog:
 
 ## Installation
 
-```bash
-# install in editable mode
-pip install -e ./gts
+GTS requires Python 3.9 or later.
 
-# install from PyPI, not supported yet
-# pip install gts
+### Local development
+
+From the repository root, build and install the same wheel artifact that will later be published and installed with `pip install gts`. `install-local` requires an explicit `PYTHON` environment variable so you choose the target interpreter:
+
+```bash
+PYTHON=.venv/bin/python make install-local
+```
+
+This creates the `.venv` virtual environment when needed, writes source and wheel distributions to `dist/`, and installs the wheel into the interpreter specified by `PYTHON`. Activate it to use the locally installed library and CLI:
+
+```bash
+source .venv/bin/activate
+python -c "import gts; print(gts.__file__)"
+gts --help
+```
+
+Use `make build` when you only need the distributable artifacts. For an editable installation while changing source files, use `make install`.
+
+### Published package
+
+After `gts` is published to PyPI, install it with:
+
+```bash
+pip install gts
 ```
 
 ## Usage
