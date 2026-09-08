@@ -306,7 +306,7 @@ class TestCastAndCompatibility:
 
 
 class TestBuildSchemaGraphWithRefs:
-    def test_graph_includes_refs_and_schema_id(self):
+    def test_graph_includes_refs_and_type_id(self):
         schema = _schema_entity("gts.x.test._.foo.v1~")
         instance = GtsEntity(
             content={
@@ -321,7 +321,7 @@ class TestBuildSchemaGraphWithRefs:
         store.register(instance)
         graph = store.build_schema_graph(instance.gts_id.id)
         assert graph["id"] == instance.gts_id.id
-        assert "schema_id" in graph
+        assert "type_id" in graph
 
     def test_graph_skips_json_schema_org_refs(self):
         schema = _schema_entity("gts.x.test._.foo.v1~")

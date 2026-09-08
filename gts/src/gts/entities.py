@@ -379,4 +379,4 @@ class GtsEntity:
         refs = {}
         for r in self.gts_refs:
             refs[r["sourcePath"]] = r["id"]
-        return {"id": self.gts_id.id, "schema_id": self.type_id, "refs": refs}
+        return {"id": self.gts_id.id, "type_id": self.type_id, "refs": refs}

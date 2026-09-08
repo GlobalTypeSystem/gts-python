@@ -1,5 +1,11 @@
 CI := 1
 
+# These recipes rely on POSIX tools (command -v, touch, rm -rf, sleep, kill,
+# cat) and POSIX syntax (background jobs, inline env assignments). Require Bash
+# explicitly so GNU Make does not fall back to cmd.exe via COMSPEC on Windows.
+# On Windows, run these targets from a Bash environment (e.g. Git Bash / MSYS2).
+SHELL := /bin/bash
+
 # Python: PYTHON_BOOTSTRAP is used only to create the virtual environment;
 # PYTHON is the venv interpreter used by all other targets.
 PYTHON_BOOTSTRAP ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)

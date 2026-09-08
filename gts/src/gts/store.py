@@ -867,7 +867,7 @@ class GtsStore:
                     if not entity.type_id.startswith(
                         "http://json-schema.org"
                     ) and not entity.type_id.startswith("https://json-schema.org"):
-                        ret["schema_id"] = gts2node(entity.type_id, seen_gts_ids)
+                        ret["type_id"] = gts2node(entity.type_id, seen_gts_ids)
                 else:
                     ret["errors"] = ret.get("errors", []) + ["Schema not recognized"]
             else:

@@ -335,5 +335,5 @@ class TestGtsEntityGetGraph:
 
         graph = entity.get_graph()
         assert graph["id"] == "gts.vendor.package.namespace.type.v1~"
-        assert graph["schema_id"] == "gts.vendor.package.namespace.type.v1~"
+        assert graph["type_id"] == "gts.vendor.package.namespace.type.v1~"
         assert "refs" in graph

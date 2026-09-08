@@ -27,8 +27,12 @@ def _without_x_gts_ref(schema: Any) -> Any:
             if key != "x-gts-ref"
         }
         for keyword in ("oneOf", "anyOf", "allOf"):
-            branches = schema.get(keyword)
-            if isinstance(branches, list) and _is_x_gts_ref_only_combinator(branches):
+            branches = stripped.get(keyword)
+            if (
+                isinstance(branches, list)
+                and branches
+                and all(isinstance(branch, dict) and not branch for branch in branches)
+            ):
                 stripped.pop(keyword, None)
         return stripped
     if isinstance(schema, list):
@@ -37,10 +41,13 @@ def _without_x_gts_ref(schema: Any) -> Any:
 
 
 def _is_x_gts_ref_only_combinator(branches: list[Any]) -> bool:
-    return bool(branches) and all(
-        isinstance(_without_x_gts_ref(branch), dict) and not _without_x_gts_ref(branch)
-        for branch in branches
-    )
+    if not branches:
+        return False
+    for branch in branches:
+        stripped = _without_x_gts_ref(branch)
+        if not isinstance(stripped, dict) or stripped:
+            return False
+    return True
 
 
 def _is_structurally_valid(instance: Any, schema: Any) -> bool:
