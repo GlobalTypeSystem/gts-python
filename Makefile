@@ -17,7 +17,7 @@ PYTHON ?= $(PY_ENV_DIR)/bin/python
 endif
 PY_ENV_STAMP := $(PY_ENV_DIR)/.stamp
 INSTALL_STAMP := $(PY_ENV_DIR)/.install-stamp
-LOCAL_DIST_DIR := dist/install-local
+LOCAL_DIST_DIR := dist-install-local
 
 ifneq ($(filter install-local uninstall-local,$(MAKECMDGOALS)),)
 ifeq ($(origin PYTHON),file)
@@ -77,7 +77,7 @@ uninstall-local:
 
 # Remove venv and build artifacts
 clean:
-	rm -rf $(PY_ENV_DIR) dist/ gts/dist/ gts/*.egg-info
+	rm -rf $(PY_ENV_DIR) dist/ $(LOCAL_DIST_DIR) gts/dist/ gts/*.egg-info
 
 # -------- Code quality --------
 
