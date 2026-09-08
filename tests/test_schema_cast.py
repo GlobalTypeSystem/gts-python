@@ -71,6 +71,17 @@ class TestInferDirection:
     def test_unknown_on_invalid_id(self):
         assert GtsEntityCastResult._infer_direction("not-an-id", "also-not") == "unknown"
 
+    def test_combined_anonymous_id_uses_versioned_segment(self):
+        # Regression: the appended UUID-tail segment has ver_minor=None; the
+        # direction must be inferred from the last versioned segment instead.
+        assert (
+            GtsEntityCastResult._infer_direction(
+                "gts.x.test._.foo.v1.0~123e4567-e89b-12d3-a456-426614174000",
+                "gts.x.test._.foo.v1.5~",
+            )
+            == "up"
+        )
+
 
 class TestEffectiveObjectSchema:
     def test_non_dict_returns_empty(self):

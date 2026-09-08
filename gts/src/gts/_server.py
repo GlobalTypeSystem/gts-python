@@ -70,10 +70,14 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
         else:
             status_color = Colors.RED
 
-        # Log response at INFO level (verbose >= 1)
+        # Log response at INFO level (verbose >= 1).
+        # Neutralize CR/LF in the request-derived path to prevent log forging
+        # (CWE-117); ASGI percent-decodes scope["path"], so it may contain
+        # newlines that would otherwise inject forged log records.
+        safe_path = request.url.path.replace("\r", "\\r").replace("\n", "\\n")
         logger.info(
             f"{Colors.CYAN}{request.method}{Colors.RESET} "
-            f"{Colors.BLUE}{request.url.path}{Colors.RESET} -> "
+            f"{Colors.BLUE}{safe_path}{Colors.RESET} -> "
             f"{status_color}{response.status_code}{Colors.RESET} "
             f"in {Colors.MAGENTA}{dur:.1f}ms{Colors.RESET}"
         )

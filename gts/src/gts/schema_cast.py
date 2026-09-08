@@ -183,11 +183,19 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _infer_direction(from_id: str, to_id: str) -> str:
+        def _last_versioned_segment(gid: GtsID):
+            # Skip the appended UUID-tail segment (ver_minor is None) so
+            # combined anonymous IDs still resolve to their versioned segment.
+            for seg in reversed(gid.gts_id_segments):
+                if not getattr(seg, "_is_uuid_tail", False):
+                    return seg
+            return gid.gts_id_segments[-1]
+
         try:
             gid_from = GtsID(from_id)
             gid_to = GtsID(to_id)
-            from_minor = gid_from.gts_id_segments[-1].ver_minor
-            to_minor = gid_to.gts_id_segments[-1].ver_minor
+            from_minor = _last_versioned_segment(gid_from).ver_minor
+            to_minor = _last_versioned_segment(gid_to).ver_minor
             if from_minor is not None and to_minor is not None:
                 if to_minor > from_minor:
                     return "up"

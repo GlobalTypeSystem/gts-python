@@ -38,7 +38,7 @@ help:
 # Create/update the virtual environment and install dev/test dependencies
 py-env: $(PY_ENV_STAMP)
 
-$(PY_ENV_STAMP): gts/pyproject.toml .gts-spec/tests/requirements.txt
+$(PY_ENV_STAMP): gts/pyproject.toml .gts-spec/tests/requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
 	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
 	$(PYTHON) -m pip install --upgrade pip
