@@ -17,6 +17,7 @@ PYTHON ?= $(PY_ENV_DIR)/bin/python
 endif
 PY_ENV_STAMP := $(PY_ENV_DIR)/.stamp
 INSTALL_STAMP := $(PY_ENV_DIR)/.install-stamp
+LOCAL_DIST_DIR := dist-install-local
 
 ifneq ($(filter install-local uninstall-local,$(MAKECMDGOALS)),)
 ifeq ($(origin PYTHON),file)
@@ -37,6 +38,9 @@ help:
 
 # Create/update the virtual environment and install dev/test dependencies
 py-env: $(PY_ENV_STAMP)
+
+$(PY_ENV_DIR)/bin/python:
+	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
 
 $(PY_ENV_STAMP): gts/pyproject.toml .gts-spec/tests/requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
@@ -60,8 +64,11 @@ build: py-env
 	$(PYTHON) -m build --outdir dist ./gts
 
 # Install the locally built wheel, equivalent to installing the published gts package
-install-local: build
-	$(PYTHON) -m pip install --force-reinstall dist/gts-*.whl
+install-local: $(if $(filter $(PY_ENV_DIR)/bin/python,$(PYTHON)),$(PY_ENV_DIR)/bin/python)
+	@rm -rf $(LOCAL_DIST_DIR)
+	$(PYTHON) -m pip install --upgrade build
+	$(PYTHON) -m build --outdir $(LOCAL_DIST_DIR) ./gts
+	$(PYTHON) -m pip install --force-reinstall $(LOCAL_DIST_DIR)/gts-*.whl
 
 # Uninstall gts from the selected interpreter
 uninstall-local:
@@ -70,7 +77,7 @@ uninstall-local:
 
 # Remove venv and build artifacts
 clean:
-	rm -rf $(PY_ENV_DIR) dist/ gts/dist/ gts/*.egg-info
+	rm -rf $(PY_ENV_DIR) dist/ $(LOCAL_DIST_DIR) gts/dist/ gts/*.egg-info
 
 # -------- Code quality --------
 
