@@ -14,7 +14,7 @@ via :func:`check_accepted_set_inclusion`.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from jsonschema.validators import validator_for
 from jsonsubschema import isSubschema
@@ -46,7 +46,7 @@ _NON_ASSERTION_KEYWORDS = {
 }
 
 
-def boolean_schema_value(schema: Any) -> Optional[bool]:
+def boolean_schema_value(schema: Any) -> bool | None:
     """Return True/False when a schema is boolean-equivalent, else None.
 
     ``{}`` == True and ``{"not": {}}`` == False; annotation keywords are ignored.
@@ -69,7 +69,7 @@ def boolean_schema_value(schema: Any) -> Optional[bool]:
     return None
 
 
-def _finite_values(schema: Any) -> Optional[list[Any]]:
+def _finite_values(schema: Any) -> list[Any] | None:
     if not isinstance(schema, dict):
         return None
     if "const" in schema:
@@ -87,11 +87,11 @@ def _value_constraint_makes_type_redundant(schema: dict[Any, Any]) -> bool:
     try:
         validator = validator_for({"type": schema["type"]})({"type": schema["type"]})
         return all(validator.is_valid(value) for value in values)
-    except Exception:
+    except Exception:  # noqa: BLE001 - intentional broad fallback
         return False
 
 
-def _finite_subset(subset: Any, superset: Any) -> Optional[bool]:
+def _finite_subset(subset: Any, superset: Any) -> bool | None:
     values = _finite_values(subset)
     if values is None:
         return None
@@ -102,7 +102,7 @@ def _finite_subset(subset: Any, superset: Any) -> Optional[bool]:
             not subset_validator.is_valid(value) or superset_validator.is_valid(value)
             for value in values
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - intentional broad fallback
         return None
 
 
@@ -145,7 +145,7 @@ def _coerce_bool_schema(schema: Any) -> Any:
     return schema
 
 
-def _is_subschema(subset: Any, superset: Any) -> Optional[bool]:
+def _is_subschema(subset: Any, superset: Any) -> bool | None:
     """``Valid(subset) subset-of Valid(superset)`` or ``None`` when unprovable."""
     finite_result = _finite_subset(subset, superset)
     if finite_result is not None:
@@ -157,11 +157,11 @@ def _is_subschema(subset: Any, superset: Any) -> Optional[bool]:
                 _coerce_bool_schema(sanitize(superset)),
             )
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - intentional broad fallback
         return None
 
 
-def _verdict(result: Optional[bool]) -> str:
+def _verdict(result: bool | None) -> str:
     if result is None:
         return UNKNOWN
     return COMPATIBLE if result else INCOMPATIBLE
@@ -185,6 +185,6 @@ def full_verdict(backward: str, forward: str) -> str:
     return UNKNOWN
 
 
-def check_accepted_set_inclusion(subset: Any, superset: Any) -> Optional[bool]:
+def check_accepted_set_inclusion(subset: Any, superset: Any) -> bool | None:
     """Shared inclusion primitive used by OP#12 derivation admission."""
     return _is_subschema(subset, superset)

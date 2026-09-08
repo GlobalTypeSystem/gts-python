@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any
 
 
 @dataclass
@@ -12,16 +12,16 @@ class GtsPathResolver:
     value: Any = None
     resolved: bool = False
     error: str | None = None
-    available_fields: List[str] = None  # type: ignore
+    available_fields: list[str] = None  # type: ignore
 
     def _normalize(self, path: str) -> str:
         return path.replace("/", ".")
 
-    def _split_raw_parts(self, norm: str) -> List[str]:
+    def _split_raw_parts(self, norm: str) -> list[str]:
         return [seg for seg in norm.split(".") if seg != ""]
 
-    def _parse_part(self, seg: str) -> List[str]:
-        out: List[str] = []
+    def _parse_part(self, seg: str) -> list[str]:
+        out: list[str] = []
         buf = ""
         i = 0
         while i < len(seg):
@@ -43,15 +43,15 @@ class GtsPathResolver:
             out.append(buf)
         return out
 
-    def _parts(self, path: str) -> List[str]:
+    def _parts(self, path: str) -> list[str]:
         norm = self._normalize(path)
         raw = self._split_raw_parts(norm)
-        parts: List[str] = []
+        parts: list[str] = []
         for seg in raw:
             parts.extend(self._parse_part(seg))
         return parts
 
-    def _list_available(self, node: Any, prefix: str, out: List[str]) -> None:
+    def _list_available(self, node: Any, prefix: str, out: list[str]) -> None:
         if isinstance(node, dict):
             for k, v in node.items():
                 p = f"{prefix}.{k}" if prefix else str(k)
@@ -65,8 +65,8 @@ class GtsPathResolver:
                 if isinstance(v, (dict, list)):
                     self._list_available(v, p, out)
 
-    def _collect_from(self, node: Any) -> List[str]:
-        acc: List[str] = []
+    def _collect_from(self, node: Any) -> list[str]:
+        acc: list[str] = []
         self._list_available(node, "", acc)
         return acc
 

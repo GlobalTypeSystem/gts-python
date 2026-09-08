@@ -17,9 +17,8 @@ Algorithm:
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from jsonschema import Draft7Validator
 from jsonschema.validators import validator_for
 
 from . import derivation
@@ -38,8 +37,8 @@ class EffectiveTraits:
         self,
         schema: Any,
         values: Any,
-        resolved_trait_schemas: List[Any],
-        merged_traits: Dict[str, Any],
+        resolved_trait_schemas: list[Any],
+        merged_traits: dict[str, Any],
     ) -> None:
         self.schema = schema
         self.values = values
@@ -52,7 +51,7 @@ class EffectiveTraits:
     def _has_explicit_values(self) -> bool:
         return isinstance(self.merged_traits, dict) and len(self.merged_traits) > 0
 
-    def validate(self, check_unresolved: bool) -> List[str]:
+    def validate(self, check_unresolved: bool) -> list[str]:
         """Return a list of error strings (empty means valid)."""
         errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
         if errors:
@@ -64,7 +63,7 @@ class EffectiveTraits:
         if not self._has_schema():
             if self._has_explicit_values():
                 return [
-                    f"{X_GTS_TRAITS} values provided but no {X_GTS_TRAITS_SCHEMA} "
+                    f"{X_GTS_TRAITS} values provided but no {X_GTS_TRAITS_SCHEMA} "  # noqa: ISC004
                     "is defined in the inheritance chain"
                 ]
             return []
@@ -72,7 +71,7 @@ class EffectiveTraits:
         if _effective_schema_is_false(self.schema):
             if self._has_explicit_values():
                 return [
-                    f"{X_GTS_TRAITS_SCHEMA} resolves to `false` in the chain - "
+                    f"{X_GTS_TRAITS_SCHEMA} resolves to `false` in the chain - "  # noqa: ISC004
                     f"{X_GTS_TRAITS} values are prohibited"
                 ]
             return []
@@ -81,7 +80,7 @@ class EffectiveTraits:
 
 
 # --- collection ------------------------------------------------------------
-def collect_trait_schema_from_value(value: Any, out: List[Any], depth: int = 0) -> None:
+def collect_trait_schema_from_value(value: Any, out: list[Any], depth: int = 0) -> None:
     if depth >= MAX_RECURSION_DEPTH or not isinstance(value, dict):
         return
     if X_GTS_TRAITS_SCHEMA in value:
@@ -93,7 +92,7 @@ def collect_trait_schema_from_value(value: Any, out: List[Any], depth: int = 0) 
 
 
 def collect_traits_from_value(
-    value: Any, merged: Dict[str, Any], depth: int = 0
+    value: Any, merged: dict[str, Any], depth: int = 0
 ) -> None:
     if depth >= MAX_RECURSION_DEPTH or not isinstance(value, dict):
         return
@@ -150,7 +149,7 @@ def _resolve_json_pointer(root: Any, pointer: str) -> Any:
 
 # --- RFC 7396 merge --------------------------------------------------------
 def merge_rfc7396_into(
-    target: Dict[str, Any], patch: Dict[str, Any], depth: int = 0
+    target: dict[str, Any], patch: dict[str, Any], depth: int = 0
 ) -> None:
     if depth >= MAX_RECURSION_DEPTH:
         return
@@ -162,7 +161,7 @@ def merge_rfc7396_into(
             if isinstance(existing, dict):
                 merge_rfc7396_into(existing, v, depth + 1)
             else:
-                fresh: Dict[str, Any] = {}
+                fresh: dict[str, Any] = {}
                 merge_rfc7396_into(fresh, v, depth + 1)
                 target[k] = fresh
         else:
@@ -170,7 +169,7 @@ def merge_rfc7396_into(
 
 
 # --- composition -----------------------------------------------------------
-def build_effective_traits_schema(schemas: List[Any]) -> Any:
+def build_effective_traits_schema(schemas: list[Any]) -> Any:
     if len(schemas) == 0:
         return {}
     if len(schemas) == 1:
@@ -179,9 +178,9 @@ def build_effective_traits_schema(schemas: List[Any]) -> Any:
 
 
 def build_effective_traits(
-    resolved_trait_schemas: List[Any],
-    merged_traits: Dict[str, Any],
-    dialect: Optional[str],
+    resolved_trait_schemas: list[Any],
+    merged_traits: dict[str, Any],
+    dialect: str | None,
 ) -> EffectiveTraits:
     effective_schema = build_effective_traits_schema(resolved_trait_schemas)
     if dialect and isinstance(effective_schema, dict):
@@ -208,7 +207,7 @@ def _effective_schema_is_false(schema: Any, depth: int = 0) -> bool:
 
 
 # --- materialization -------------------------------------------------------
-def _collect_props(schema: Any, props: List[Tuple[str, Any]], depth: int = 0) -> None:
+def _collect_props(schema: Any, props: list[tuple[str, Any]], depth: int = 0) -> None:
     if depth >= MAX_RECURSION_DEPTH or not isinstance(schema, dict):
         return
     p = schema.get("properties")
@@ -221,12 +220,12 @@ def _collect_props(schema: Any, props: List[Tuple[str, Any]], depth: int = 0) ->
             _collect_props(item, props, depth + 1)
 
 
-def _collect_all_properties(schema: Any) -> List[Tuple[str, Any]]:
-    props: List[Tuple[str, Any]] = []
+def _collect_all_properties(schema: Any) -> list[tuple[str, Any]]:
+    props: list[tuple[str, Any]] = []
     _collect_props(schema, props, 0)
     # keep last occurrence of each name (rightmost wins)
     seen = set()
-    deduped: List[Tuple[str, Any]] = []
+    deduped: list[tuple[str, Any]] = []
     for name, sch in reversed(props):
         if name not in seen:
             seen.add(name)
@@ -255,14 +254,14 @@ def _collect_all_required(schema: Any, req=None, depth: int = 0):
 def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
     if depth >= MAX_RECURSION_DEPTH:
         return copy.deepcopy(traits)
-    result: Dict[str, Any] = dict(traits) if isinstance(traits, dict) else {}
+    result: dict[str, Any] = dict(traits) if isinstance(traits, dict) else {}
 
-    all_props: List[Tuple[str, Any]] = []
+    all_props: list[tuple[str, Any]] = []
     _collect_props(trait_schema, all_props, 0)
 
     # Resolve each property once; nearest (most-derived) default wins (leaf->root).
-    order: List[str] = []
-    resolved: Dict[str, Tuple[Any, Any]] = {}
+    order: list[str] = []
+    resolved: dict[str, tuple[Any, Any]] = {}
     for name, sch in reversed(all_props):
         if name not in resolved:
             order.append(name)
@@ -288,7 +287,7 @@ def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
 
 
 # --- validation ------------------------------------------------------------
-def _validate_trait_schema_integrity(resolved_trait_schemas: List[Any]) -> List[str]:
+def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
             continue
@@ -296,20 +295,20 @@ def _validate_trait_schema_integrity(resolved_trait_schemas: List[Any]) -> List[
             try:
                 cls = validator_for(ts)
                 cls.check_schema(ts)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - surfaced as validation error message
                 return [f"{X_GTS_TRAITS_SCHEMA}[{i}] is not a valid JSON Schema: {e}"]
         else:
             return [
-                f"{X_GTS_TRAITS_SCHEMA}[{i}] must be an object subschema or a "
+                f"{X_GTS_TRAITS_SCHEMA}[{i}] must be an object subschema or a "  # noqa: ISC004
                 f"boolean; got {ts}"
             ]
     return []
 
 
 def _validate_trait_schema_compatibility(
-    resolved_trait_schemas: List[Any],
-) -> List[str]:
-    errors: List[str] = []
+    resolved_trait_schemas: list[Any],
+) -> list[str]:
+    errors: list[str] = []
     for i in range(1, len(resolved_trait_schemas)):
         ancestor_schema = build_effective_traits_schema(resolved_trait_schemas[:i])
         descendant_schema = build_effective_traits_schema(
@@ -351,8 +350,8 @@ def _strip_required(schema: Any, depth: int = 0) -> Any:
 
 def _validate_traits_against_schema(
     trait_schema: Any, effective_traits: Any, check_unresolved: bool
-) -> List[str]:
-    errors: List[str] = []
+) -> list[str]:
+    errors: list[str] = []
     validation_schema = (
         trait_schema if check_unresolved else _strip_required(trait_schema)
     )
@@ -362,7 +361,7 @@ def _validate_traits_against_schema(
         validator = cls(validation_schema)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surfaced as validation error message
         errors.append(f"failed to compile trait schema: {e}")
 
     if not check_unresolved:
@@ -393,7 +392,7 @@ def _validate_traits_against_schema(
 
 def _validate_trait_values(
     effective_traits_schema: Any, effective_traits: Any, check_unresolved: bool
-) -> List[str]:
+) -> list[str]:
     errors = _validate_traits_against_schema(
         effective_traits_schema, effective_traits, check_unresolved
     )

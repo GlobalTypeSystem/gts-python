@@ -1,24 +1,26 @@
 from __future__ import annotations
 
 import json
-import yaml
-from pathlib import Path
-import os
-from typing import Iterator, List, Optional, Any
-
-from .store import GtsReader
-from .entities import GtsEntity, GtsFile, DEFAULT_GTS_CONFIG, GtsConfig
-
 import logging
+import os
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
+import yaml
+
+from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity, GtsFile
+from .store import GtsReader
 
 EXCLUDE_LIST = ["node_modules", "dist", "build"]
+
+logger = logging.getLogger(__name__)
 
 
 class GtsFileReader(GtsReader):
     """Reads GTS entities from JSON and YAML files in directories specified by path."""
 
-    def __init__(self, path: str | List[str], cfg: Optional[GtsConfig] = None) -> None:
+    def __init__(self, path: str | list[str], cfg: GtsConfig | None = None) -> None:
         """
         Initialize FileReader with one or more paths.
 
@@ -26,16 +28,16 @@ class GtsFileReader(GtsReader):
             path: Single path string or list of paths (files or directories)
             cfg: GtsConfig for entity ID extraction (defaults to DEFAULT_GTS_CONFIG)
         """
-        self.paths: List[Path] = []
+        self.paths: list[Path] = []
         if isinstance(path, str):
             self.paths = [Path(os.path.expanduser(path))]
         else:
             self.paths = [Path(os.path.expanduser(p)) for p in path]
 
         self.cfg = cfg or DEFAULT_GTS_CONFIG
-        self._files: List[Path] = []
+        self._files: list[Path] = []
         self._current_index = 0
-        self._current_file_entities: List[GtsEntity] = []
+        self._current_file_entities: list[GtsEntity] = []
         self._current_entity_index = 0
         self._initialized = False
 
@@ -43,7 +45,7 @@ class GtsFileReader(GtsReader):
         """Collect all JSON and YAML files from the specified paths, following symlinks."""
         valid_extensions = {".json", ".jsonc", ".gts", ".yaml", ".yml"}
         seen: set[str] = set()
-        collected: List[Path] = []
+        collected: list[Path] = []
 
         for path in self.paths:
             # Resolve symlinks and make absolute (non-strict to allow non-existing paths to be handled gracefully)
@@ -54,7 +56,7 @@ class GtsFileReader(GtsReader):
                     rp = str(resolved_path)
                     if rp not in seen:
                         seen.add(rp)
-                        logging.debug(f"- discovered file: {resolved_path}")
+                        logger.debug(f"- discovered file: {resolved_path}")
                         collected.append(resolved_path)
             elif resolved_path.is_dir():
                 # Recursively scan for all valid file types, following symlinks
@@ -69,7 +71,7 @@ class GtsFileReader(GtsReader):
                             rp = str(fpath.resolve(strict=False))
                             if rp not in seen:
                                 seen.add(rp)
-                                logging.debug(f"- discovered file: {fpath}")
+                                logger.debug(f"- discovered file: {fpath}")
                                 collected.append(Path(rp))
 
         self._files = collected
@@ -82,9 +84,9 @@ class GtsFileReader(GtsReader):
             else:
                 return json.load(f)
 
-    def _process_file(self, file_path: Path) -> List[GtsEntity]:
+    def _process_file(self, file_path: Path) -> list[GtsEntity]:
         """Process a single JSON or YAML file and return list of GtsEntity objects."""
-        entities: List[GtsEntity] = []
+        entities: list[GtsEntity] = []
 
         try:
             content = self._load_file(file_path)
@@ -99,18 +101,17 @@ class GtsFileReader(GtsReader):
                         file=json_file, list_sequence=idx, content=item, cfg=self.cfg
                     )
                     if entity.gts_id:
-                        logging.debug(f"- discovered entity: {entity.gts_id.id}")
+                        logger.debug(f"- discovered entity: {entity.gts_id.id}")
                         entities.append(entity)
             else:
                 entity = GtsEntity(
                     file=json_file, list_sequence=None, content=content, cfg=self.cfg
                 )
                 if entity.gts_id:
-                    logging.debug(f"- discovered entity: {entity.gts_id.id}")
+                    logger.debug(f"- discovered entity: {entity.gts_id.id}")
                     entities.append(entity)
         except Exception:
-            # Skip files that can't be parsed
-            pass
+            logger.debug("skipping unparsable file: %s", file_path, exc_info=True)
 
         return entities
 
@@ -120,13 +121,11 @@ class GtsFileReader(GtsReader):
             self._collect_files()
             self._initialized = True
 
-        logging.debug(f"Processing {len(self._files)} files from {self.paths}")
+        logger.debug(f"Processing {len(self._files)} files from {self.paths}")
         for file_path in self._files:
-            entities = self._process_file(file_path)
-            for entity in entities:
-                yield entity
+            yield from self._process_file(file_path)
 
-    def read_by_id(self, entity_id: str) -> Optional[GtsEntity]:
+    def read_by_id(self, entity_id: str) -> GtsEntity | None:
         """
         Read a GtsEntity by its ID.
         For FileReader, this returns None as we don't support random access by ID.

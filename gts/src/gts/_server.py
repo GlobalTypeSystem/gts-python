@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import logging
 import sys
+import time
+from typing import Any
 
-from fastapi import FastAPI, Body, Query
+from fastapi import Body, FastAPI, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 from starlette.middleware.base import BaseHTTPMiddleware
-import time
-import logging
 
 from .ops import GtsOps
+
+logger = logging.getLogger(__name__)
 
 
 # ANSI color codes
@@ -69,7 +71,7 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
             status_color = Colors.RED
 
         # Log response at INFO level (verbose >= 1)
-        logging.info(
+        logger.info(
             f"{Colors.CYAN}{request.method}{Colors.RESET} "
             f"{Colors.BLUE}{request.url.path}{Colors.RESET} -> "
             f"{status_color}{response.status_code}{Colors.RESET} "
@@ -83,13 +85,13 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
 
                 body_json = json.loads(cached_body.decode("utf-8"))
                 body_str = json.dumps(body_json, indent=2)
-                logging.debug(
+                logger.debug(
                     f"{Colors.DIM}Request body:{Colors.RESET}\n"
                     f"{Colors.GRAY}{body_str}{Colors.RESET}"
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort debug logging
                 body_str = cached_body.decode("utf-8", errors="replace")
-                logging.debug(
+                logger.debug(
                     f"{Colors.DIM}Request body (raw):{Colors.RESET}\n"
                     f"{Colors.GRAY}{body_str}{Colors.RESET}"
                 )
@@ -97,7 +99,7 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
         # Log response body at DEBUG level (verbose >= 2)
         if self.verbose >= 2:
             # Read response body
-            from starlette.responses import StreamingResponse, Response
+            from starlette.responses import Response, StreamingResponse
 
             if isinstance(response, (Response, StreamingResponse)):
                 response_body = b""
@@ -110,13 +112,13 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
 
                         body_json = json.loads(response_body.decode("utf-8"))
                         body_str = json.dumps(body_json, indent=2)
-                        logging.debug(
+                        logger.debug(
                             f"{Colors.DIM}Response body:{Colors.RESET}\n"
                             f"{Colors.GRAY}{body_str}{Colors.RESET}"
                         )
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - best-effort debug logging
                         body_str = response_body.decode("utf-8", errors="replace")
-                        logging.debug(
+                        logger.debug(
                             f"{Colors.DIM}Response body (raw):{Colors.RESET}\n"
                             f"{Colors.GRAY}{body_str}{Colors.RESET}"
                         )
@@ -134,7 +136,7 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 class SchemaRegister(BaseModel):
     type_id: str
-    type_schema: Dict[str, Any]
+    type_schema: dict[str, Any]
 
 
 class CastRequest(BaseModel):
@@ -151,11 +153,11 @@ class ValidateTypeSchemaRequest(BaseModel):
 
 
 class ValidateEntityRequest(BaseModel):
-    entity_id: Optional[str] = None
-    gts_id: Optional[str] = None
+    entity_id: str | None = None
+    gts_id: str | None = None
 
     @model_validator(mode="after")
-    def validate_id(self) -> "ValidateEntityRequest":
+    def validate_id(self) -> ValidateEntityRequest:
         if not self.entity_id and not self.gts_id:
             raise ValueError("entity_id (or gts_id) is required")
         if self.entity_id and self.gts_id and self.entity_id != self.gts_id:
@@ -321,14 +323,17 @@ class GtsHttpServer:
 
     # Handlers as methods (no free functions)
     async def add_entity(
-        self, body: Dict[str, Any] = Body(...), validate: bool = Query(False)
+        self,
+        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        validate: bool = Query(False),
     ) -> JSONResponse:
         result = self.ops.add_entity(body, validate=validate)
         status_code = 200 if result.ok else 422
         return JSONResponse(result.to_dict(), status_code=status_code)
 
     async def add_entities(
-        self, body: List[Dict[str, Any]] = Body(...)
+        self,
+        body: list[dict[str, Any]] = Body(...),  # noqa: B008 - FastAPI dependency pattern
     ) -> JSONResponse:
         return JSONResponse(self.ops.add_entities(body).to_dict())
 
@@ -337,63 +342,66 @@ class GtsHttpServer:
             self.ops.add_schema(body.type_id, body.type_schema).to_dict()
         )
 
-    async def validate_id(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
+    async def validate_id(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.validate_id(id).to_dict()
 
-    async def extract_id(self, body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    async def extract_id(
+        self,
+        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+    ) -> dict[str, Any]:
         return self.ops.extract_id(body).to_dict()
 
-    async def parse(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
+    async def parse(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.parse_id(id).to_dict()
 
     async def match_id_pattern(
         self,
         candidate: str = Query(...),
         pattern: str = Query(...),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.match_id_pattern(candidate, pattern).to_dict()
 
-    async def id_to_uuid(self, id: str = Query(..., alias="gts_id")) -> Dict[str, Any]:
+    async def id_to_uuid(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.uuid(id).to_dict()
 
-    async def validate_instance(self, body: ValidateInstanceRequest) -> Dict[str, Any]:
+    async def validate_instance(self, body: ValidateInstanceRequest) -> dict[str, Any]:
         return self.ops.validate_instance(body.instance_id).to_dict()
 
     async def validate_type_schema(
         self, body: ValidateTypeSchemaRequest
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.validate_schema(body.type_id).to_dict()
 
-    async def validate_entity(self, body: ValidateEntityRequest) -> Dict[str, Any]:
+    async def validate_entity(self, body: ValidateEntityRequest) -> dict[str, Any]:
         return self.ops.validate_entity(body.resolved_id).to_dict()
 
     async def schema_graph(
         self, id: str = Query(..., alias="gts_id")
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.schema_graph(id).to_dict()
 
     async def compatibility(
         self,
         old: str = Query(..., alias="old_type_id"),
         new: str = Query(..., alias="new_type_id"),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.compatibility(old, new).to_dict()
 
-    async def cast(self, body: CastRequest) -> Dict[str, Any]:
+    async def cast(self, body: CastRequest) -> dict[str, Any]:
         return self.ops.cast(body.instance_id, body.to_type_id).to_dict()
 
     async def query(
         self, expr: str = Query(...), limit: int = Query(100, ge=1, le=1000)
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.query(expr, limit=limit).to_dict()
 
-    async def attr(self, gts_with_path: str = Query(...)) -> Dict[str, Any]:
+    async def attr(self, gts_with_path: str = Query(...)) -> dict[str, Any]:
         return self.ops.attr(gts_with_path).to_dict()
 
-    async def get_entity(self, gts_id: str) -> Dict[str, Any]:
+    async def get_entity(self, gts_id: str) -> dict[str, Any]:
         return self.ops.get_entity(gts_id).to_dict()
 
     async def get_entities(
         self, limit: int = Query(100, ge=1, le=1000)
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.ops.get_entities(limit=limit).to_dict()

@@ -38,6 +38,7 @@ $(PY_ENV_STAMP): gts/pyproject.toml .gts-spec/tests/requirements.txt
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -r .gts-spec/tests/requirements.txt
 	$(PYTHON) -m pip install --no-deps 'httprunner>=4,<5'
+	$(PYTHON) -m pip install ruff mypy
 	@touch $@
 
 # Install gts package into the venv (editable, for development)
@@ -68,25 +69,24 @@ clean:
 # -------- Code quality --------
 
 # Fix formatting issues
-dev-fmt:
-	ruff format gts/src
+dev-fmt: py-env
+	$(PYTHON) -m ruff format gts/src
 
 # Check code formatting
-fmt:
-	@$(PYTHON) -m ruff --version >/dev/null 2>&1 || { echo "Ruff is required. Install it with: $(PYTHON) -m pip install ruff"; exit 1; }
+fmt: py-env
 	$(PYTHON) -m ruff format --check gts/src
 
 # Run linter (ruff)
-lint:
-	ruff check gts/src
+lint: py-env
+	$(PYTHON) -m ruff check gts/src
 
 # Run clippy-equivalent linter with auto-fix
-clippy:
-	ruff check --fix gts/src
+clippy: py-env
+	$(PYTHON) -m ruff check --fix gts/src
 
 # Run type checker
-mypy:
-	mypy gts/src/gts --ignore-missing-imports
+mypy: py-env
+	$(PYTHON) -m mypy gts/src/gts --ignore-missing-imports
 
 # -------- Tests --------
 

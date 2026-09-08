@@ -11,11 +11,12 @@ Key optimizations:
 """
 
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+
+from typing import Any
 
 from jsonschema.validators import validator_for
 
-from .gts import GtsID, GTS_URI_PREFIX
+from .gts import GTS_URI_PREFIX, GtsID
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
@@ -35,7 +36,7 @@ def _without_x_gts_ref(schema: Any) -> Any:
     return schema
 
 
-def _is_x_gts_ref_only_combinator(branches: List[Any]) -> bool:
+def _is_x_gts_ref_only_combinator(branches: list[Any]) -> bool:
     return bool(branches) and all(
         isinstance(_without_x_gts_ref(branch), dict) and not _without_x_gts_ref(branch)
         for branch in branches
@@ -46,7 +47,7 @@ def _is_structurally_valid(instance: Any, schema: Any) -> bool:
     try:
         validator = validator_for(schema)(_without_x_gts_ref(schema))
         return validator.is_valid(instance)
-    except Exception:
+    except Exception:  # noqa: BLE001 - treat any validation error as "not valid"
         return False
 
 
@@ -66,7 +67,7 @@ class XGtsRefValidationError(Exception):
 class XGtsRefValidator:
     """Validator for x-gts-ref constraints in GTS schemas."""
 
-    def __init__(self, store: Optional[Any] = None):
+    def __init__(self, store: Any | None = None):
         """
         Initialize validator.
 
@@ -76,8 +77,8 @@ class XGtsRefValidator:
         self.store = store
 
     def validate_instance(
-        self, instance: Dict[str, Any], schema: Dict[str, Any], instance_path: str = ""
-    ) -> List[XGtsRefValidationError]:
+        self, instance: dict[str, Any], schema: dict[str, Any], instance_path: str = ""
+    ) -> list[XGtsRefValidationError]:
         """
         Validate an instance against x-gts-ref constraints in schema.
 
@@ -89,7 +90,7 @@ class XGtsRefValidator:
         Returns:
             List of validation errors (empty if valid)
         """
-        errors: List[XGtsRefValidationError] = []
+        errors: list[XGtsRefValidationError] = []
 
         def visit_instance(inst, sch, path, errs):
             """Visit instance nodes and validate x-gts-ref constraints."""
@@ -169,23 +170,23 @@ class XGtsRefValidator:
                     if _is_structurally_valid(inst, branch):
                         errs.extend(_validate_branch(inst, branch, path))
 
-            if sch.get("type") == "object" and "properties" in sch:
-                if isinstance(inst, dict):
-                    for prop_name, prop_schema in sch["properties"].items():
-                        if prop_name in inst:
-                            prop_path = f"{path}.{prop_name}" if path else prop_name
-                            visit_instance(
-                                inst[prop_name], prop_schema, prop_path, errs
-                            )
+            if (
+                sch.get("type") == "object"
+                and "properties" in sch
+                and isinstance(inst, dict)
+            ):
+                for prop_name, prop_schema in sch["properties"].items():
+                    if prop_name in inst:
+                        prop_path = f"{path}.{prop_name}" if path else prop_name
+                        visit_instance(inst[prop_name], prop_schema, prop_path, errs)
 
-            if sch.get("type") == "array" and "items" in sch:
-                if isinstance(inst, list):
-                    for idx, item in enumerate(inst):
-                        item_path = f"{path}[{idx}]"
-                        visit_instance(item, sch["items"], item_path, errs)
+            if sch.get("type") == "array" and "items" in sch and isinstance(inst, list):
+                for idx, item in enumerate(inst):
+                    item_path = f"{path}[{idx}]"
+                    visit_instance(item, sch["items"], item_path, errs)
 
         def _validate_branch(inst, branch, path):
-            branch_errors: List[XGtsRefValidationError] = []
+            branch_errors: list[XGtsRefValidationError] = []
             visit_instance(inst, branch, path, branch_errors)
             return branch_errors
 
@@ -194,10 +195,10 @@ class XGtsRefValidator:
 
     def validate_schema(
         self,
-        schema: Dict[str, Any],
+        schema: dict[str, Any],
         schema_path: str = "",
-        root_schema: Optional[Dict[str, Any]] = None,
-    ) -> List[XGtsRefValidationError]:
+        root_schema: dict[str, Any] | None = None,
+    ) -> list[XGtsRefValidationError]:
         """
         Validate x-gts-ref fields in a schema definition.
 
@@ -243,8 +244,8 @@ class XGtsRefValidator:
         return errors
 
     def _validate_ref_value(
-        self, value: str, ref_pattern: str, field_path: str, schema: Dict[str, Any]
-    ) -> Optional[XGtsRefValidationError]:
+        self, value: str, ref_pattern: str, field_path: str, schema: dict[str, Any]
+    ) -> XGtsRefValidationError | None:
         """
         Validate an instance value against its x-gts-ref constraint.
 
@@ -290,8 +291,8 @@ class XGtsRefValidator:
         return self._validate_gts_pattern(value, ref_pattern, field_path)
 
     def _validate_ref_pattern(
-        self, ref_pattern: str, field_path: str, root_schema: Dict[str, Any]
-    ) -> Optional[XGtsRefValidationError]:
+        self, ref_pattern: str, field_path: str, root_schema: dict[str, Any]
+    ) -> XGtsRefValidationError | None:
         """
         Validate an x-gts-ref pattern in a schema definition.
 
@@ -343,7 +344,7 @@ class XGtsRefValidator:
 
     def _validate_gts_id_or_pattern(
         self, pattern: str, field_path: str
-    ) -> Optional[XGtsRefValidationError]:
+    ) -> XGtsRefValidationError | None:
         """Validate a GTS ID or pattern in schema definition."""
         if pattern == "gts.*":
             return None  # Valid wildcard
@@ -369,7 +370,7 @@ class XGtsRefValidator:
 
     def _validate_gts_pattern(
         self, value: str, pattern: str, field_path: str
-    ) -> Optional[XGtsRefValidationError]:
+    ) -> XGtsRefValidationError | None:
         """
         Validate value matches a GTS pattern.
 
@@ -429,7 +430,7 @@ class XGtsRefValidator:
             return value[len(GTS_URI_PREFIX) :]
         return value
 
-    def _resolve_pointer(self, schema: Dict[str, Any], pointer: str) -> Optional[str]:
+    def _resolve_pointer(self, schema: dict[str, Any], pointer: str) -> str | None:
         """
         Resolve a JSON Pointer in the schema.
 

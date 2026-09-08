@@ -16,7 +16,7 @@ admission rules.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .compatibility import boolean_schema_value, check_accepted_set_inclusion
 
@@ -30,7 +30,7 @@ def validate_derivation_compatibility(
     derived_schema: Any,
     base_id: str,
     derived_id: str,
-) -> List[str]:
+) -> list[str]:
     """Full OP#12 admission check on resolved base/derived schemas."""
     errors = _validate_derivation(base_schema, derived_schema, base_id, derived_id)
     errors.extend(
@@ -46,7 +46,7 @@ def validate_derivation(
     derived_schema: Any,
     base_id: str,
     derived_id: str,
-) -> List[str]:
+) -> list[str]:
     """Declaration inclusion check without the closed-descendant branch rule."""
     return _validate_derivation(base_schema, derived_schema, base_id, derived_id)
 
@@ -56,7 +56,7 @@ def validate_closed_descendant_branches(
     descendant_schema: Any,
     ancestor_label: str,
     descendant_label: str,
-) -> List[str]:
+) -> list[str]:
     return _validate_closed_descendant_branches(
         ancestor_schema, descendant_schema, ancestor_label, descendant_label
     )
@@ -68,10 +68,10 @@ def _validate_derivation(
     derived_schema: Any,
     base_id: str,
     derived_id: str,
-) -> List[str]:
+) -> list[str]:
     base = _declared_schema(base_schema, 0)
     derived = _declared_schema(derived_schema, 0)
-    errors: List[str] = []
+    errors: list[str] = []
 
     # An omitted additionalProperties inherits the base's constraint through
     # allOf composition rather than reopening the level.
@@ -111,8 +111,8 @@ def _declared_schema(schema: Any, depth: int) -> Any:
         return copy.deepcopy(schema)
     if depth >= MAX_RECURSION_DEPTH:
         return copy.deepcopy(schema)
-    declared: Dict[str, Any] = {}
-    additional: List[Any] = [None]
+    declared: dict[str, Any] = {}
+    additional: list[Any] = [None]
 
     all_of = schema.get("allOf")
     if isinstance(all_of, list):
@@ -128,9 +128,9 @@ def _declared_schema(schema: Any, depth: int) -> Any:
 
 
 def _absorb_declaration(
-    declared: Dict[str, Any],
-    additional: List[Any],
-    source: Dict[str, Any],
+    declared: dict[str, Any],
+    additional: list[Any],
+    source: dict[str, Any],
     depth: int,
 ) -> None:
     for keyword, value in source.items():
@@ -167,10 +167,10 @@ def _absorb_property(inherited: Any, overlay: Any, depth: int) -> Any:
     ):
         return copy.deepcopy(overlay)
 
-    composed: Dict[str, Any] = {
+    composed: dict[str, Any] = {
         k: copy.deepcopy(v) for k, v in overlay.items() if k not in _STRUCTURAL
     }
-    additional: List[Any] = [inherited.get(_ADDITIONAL)]
+    additional: list[Any] = [inherited.get(_ADDITIONAL)]
     for keyword in ("properties", "required"):
         if keyword in inherited:
             composed[keyword] = copy.deepcopy(inherited[keyword])
@@ -181,7 +181,7 @@ def _absorb_property(inherited: Any, overlay: Any, depth: int) -> Any:
 
 
 def _merge_additional_properties_constraint(
-    additional: List[Any], candidate: Any
+    additional: list[Any], candidate: Any
 ) -> None:
     current = additional[0]
     if boolean_schema_value(current) is False:
@@ -196,7 +196,7 @@ def _collect_disabled_base_properties(
     derived: Any,
     base_id: str,
     derived_id: str,
-    errors: List[str],
+    errors: list[str],
 ) -> None:
     base_flat = flatten_schema(base)
     derived_flat = flatten_schema(derived)
@@ -224,8 +224,8 @@ def _validate_closed_descendant_branches(
     descendant_schema: Any,
     ancestor_label: str,
     descendant_label: str,
-) -> List[str]:
-    errors: List[str] = []
+) -> list[str]:
+    errors: list[str] = []
     _collect_closed_descendant_branch_errors(
         flatten_schema(ancestor_schema),
         descendant_schema,
@@ -245,7 +245,7 @@ def _collect_closed_descendant_branch_errors(
     depth: int,
     ancestor_label: str,
     descendant_label: str,
-    errors: List[str],
+    errors: list[str],
 ) -> None:
     if depth >= MAX_RECURSION_DEPTH:
         errors.append(
@@ -317,7 +317,7 @@ def flatten_schema(schema: Any) -> Any:
     """Merge ``allOf`` into one effective object schema (recursive on props)."""
     if not isinstance(schema, dict):
         return schema
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     all_of = schema.get("allOf")
     if isinstance(all_of, list):
         for branch in all_of:
@@ -329,7 +329,7 @@ def flatten_schema(schema: Any) -> Any:
     return result
 
 
-def _merge_flat(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+def _merge_flat(target: dict[str, Any], source: dict[str, Any]) -> None:
     for key, value in source.items():
         if key == "properties" and isinstance(value, dict):
             props = target.setdefault("properties", {})

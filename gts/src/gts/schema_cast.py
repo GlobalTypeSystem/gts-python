@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
-
 import copy
-from jsonschema import validate as js_validate
+import logging
+from dataclasses import dataclass
+from typing import Any
+
 from jsonschema import exceptions as js_exceptions
+from jsonschema import validate as js_validate
 
 from .gts import GtsID
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaCastError(Exception):
@@ -19,22 +22,22 @@ class GtsEntityCastResult:
     from_id: str = ""
     to_id: str = ""
     direction: str = "unknown"
-    added_properties: List[str] = None  # type: ignore
-    removed_properties: List[str] = None  # type: ignore
-    changed_properties: List[Dict[str, str]] = None  # type: ignore
+    added_properties: list[str] = None  # type: ignore
+    removed_properties: list[str] = None  # type: ignore
+    changed_properties: list[dict[str, str]] = None  # type: ignore
     is_fully_compatible: bool = False
     is_backward_compatible: bool = False
     is_forward_compatible: bool = False
-    incompatibility_reasons: List[str] = None  # type: ignore
-    backward_errors: List[str] = None  # type: ignore
-    forward_errors: List[str] = None  # type: ignore
-    casted_entity: Optional[Dict[str, Any]] = None
+    incompatibility_reasons: list[str] = None  # type: ignore
+    backward_errors: list[str] = None  # type: ignore
+    forward_errors: list[str] = None  # type: ignore
+    casted_entity: dict[str, Any] | None = None
     error: str = ""
     # Optional explicit verdict strings ("compatible"/"incompatible"/"unknown").
     # When set, these take precedence over the boolean flags in to_dict().
-    backward_verdict: Optional[str] = None
-    forward_verdict: Optional[str] = None
-    full_verdict: Optional[str] = None
+    backward_verdict: str | None = None
+    forward_verdict: str | None = None
+    full_verdict: str | None = None
 
     def __post_init__(self):
         # Initialize list fields if None
@@ -51,7 +54,7 @@ class GtsEntityCastResult:
         if self.forward_errors is None:
             self.forward_errors = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         def _compat_str(val: bool) -> str:
             return "compatible" if val else "incompatible"
 
@@ -91,7 +94,7 @@ class GtsEntityCastResult:
         from_instance_content: dict,
         from_schema_content: dict,
         to_schema_content: dict,
-        resolver: Optional[Any] = None,
+        resolver: Any | None = None,
     ) -> GtsEntityCastResult:
         # Flatten target schema to merge allOf and get all properties including const values
         target_schema = cls._flatten_schema(to_schema_content)
@@ -119,12 +122,12 @@ class GtsEntityCastResult:
         )
 
         # Apply casting rules to the instance
-        added: List[str] = []
-        removed: List[str] = []
-        reasons: List[str] = []
+        added: list[str] = []
+        removed: list[str] = []
+        reasons: list[str] = []
 
         try:
-            casted, added, removed, incompatibility_reasons = (
+            casted, added, removed, _incompatibility_reasons = (
                 cls._cast_instance_to_schema(
                     copy.deepcopy(from_instance_content)
                     if isinstance(from_instance_content, dict)
@@ -138,8 +141,8 @@ class GtsEntityCastResult:
                 from_id=from_instance_id,
                 to_id=to_schema_id,
                 direction=direction,
-                added_properties=sorted(list(dict.fromkeys(added))),
-                removed_properties=sorted(list(dict.fromkeys(removed))),
+                added_properties=sorted(dict.fromkeys(added)),
+                removed_properties=sorted(dict.fromkeys(removed)),
                 changed_properties=[],
                 is_fully_compatible=False,
                 is_backward_compatible=is_backward,
@@ -166,8 +169,8 @@ class GtsEntityCastResult:
             from_id=from_instance_id,
             to_id=to_schema_id,
             direction=direction,
-            added_properties=sorted(list(dict.fromkeys(added))),
-            removed_properties=sorted(list(dict.fromkeys(removed))),
+            added_properties=sorted(dict.fromkeys(added)),
+            removed_properties=sorted(dict.fromkeys(removed)),
             changed_properties=[],
             is_fully_compatible=is_fully_compatible,
             is_backward_compatible=is_backward,
@@ -192,11 +195,16 @@ class GtsEntityCastResult:
                     return "down"
                 return "none"
         except Exception:
-            pass
+            logger.debug(
+                "could not infer version direction for %s -> %s",
+                from_id,
+                to_id,
+                exc_info=True,
+            )
         return "unknown"
 
     @staticmethod
-    def _effective_object_schema(s: Dict[str, Any]) -> Dict[str, Any]:
+    def _effective_object_schema(s: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(s, dict):
             return {}
         if isinstance(s.get("properties"), dict) or isinstance(s.get("required"), list):
@@ -212,11 +220,11 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _cast_instance_to_schema(
-        instance: Dict[str, Any],
-        schema: Dict[str, Any],
+        instance: dict[str, Any],
+        schema: dict[str, Any],
         base_path: str = "",
-        incompatibility_reasons: List[str] = [],
-    ) -> Tuple[Dict[str, Any], List[str], List[str], List[str]]:
+        incompatibility_reasons: list[str] | None = None,
+    ) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
         """Transform instance to conform to schema.
 
         Rules:
@@ -225,9 +233,11 @@ class GtsEntityCastResult:
         - Validate constraints via a final jsonschema validation step
         - Recursively handle nested objects (and arrays of objects)
         """
-        added: List[str] = []
-        removed: List[str] = []
-        incompatibility_reasons: List[str] = []
+        if incompatibility_reasons is None:
+            incompatibility_reasons = []
+        added: list[str] = []
+        removed: list[str] = []
+        incompatibility_reasons: list[str] = []
 
         if not isinstance(instance, dict):
             raise SchemaCastError("Instance must be an object for casting")
@@ -245,7 +255,7 @@ class GtsEntityCastResult:
         additional = schema.get("additionalProperties", True)
 
         # Start from current values
-        result: Dict[str, Any] = dict(instance)
+        result: dict[str, Any] = dict(instance)
 
         # 1) Ensure required properties exist (fill defaults if provided)
         for prop in required:
@@ -285,12 +295,16 @@ class GtsEntityCastResult:
                 if prop in result:
                     old_value = result[prop]
                     # Only update if the const value is different and both are GTS IDs
-                    if isinstance(const_value, str) and isinstance(old_value, str):
-                        if GtsID.is_valid(const_value) and GtsID.is_valid(old_value):
-                            if old_value != const_value:
-                                result[prop] = const_value
-                                path = f"{base_path}.{prop}" if base_path else prop
-                                # Don't add to changed list, this is expected for version casting
+                    if (
+                        isinstance(const_value, str)
+                        and isinstance(old_value, str)
+                        and GtsID.is_valid(const_value)
+                        and GtsID.is_valid(old_value)
+                        and old_value != const_value
+                    ):
+                        result[prop] = const_value
+                        path = f"{base_path}.{prop}" if base_path else prop
+                        # Don't add to changed list, this is expected for version casting
 
         # 3) Remove properties not present in target schema when additionalProperties is false
         if additional is False:
@@ -331,7 +345,7 @@ class GtsEntityCastResult:
                     nested_schema = GtsEntityCastResult._effective_object_schema(
                         items_schema
                     )
-                    new_list: List[Any] = []
+                    new_list: list[Any] = []
                     for idx, item in enumerate(val):
                         if isinstance(item, dict):
                             new_item, add_sub, rem_sub, new_incompatibility_reasons = (
@@ -358,9 +372,9 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _validate_with_gts_id_tolerance(
-        instance: Dict[str, Any],
-        schema: Dict[str, Any],
-        resolver: Optional[Any] = None,
+        instance: dict[str, Any],
+        schema: dict[str, Any],
+        resolver: Any | None = None,
     ) -> None:
         """Validate instance against schema, but allow const values to differ if both are GTS IDs."""
         # Create a modified schema that removes const constraints for GTS IDs
@@ -400,7 +414,7 @@ class GtsEntityCastResult:
         return result
 
     @staticmethod
-    def _flatten_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+    def _flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
         """Flatten a schema by merging allOf schemas."""
         result = {"properties": {}, "required": []}
 
@@ -428,12 +442,12 @@ class GtsEntityCastResult:
     @staticmethod
     def _check_min_max_constraint(
         prop: str,
-        old_schema: Dict[str, Any],
-        new_schema: Dict[str, Any],
+        old_schema: dict[str, Any],
+        new_schema: dict[str, Any],
         min_key: str,
         max_key: str,
         check_tightening: bool,
-    ) -> List[str]:
+    ) -> list[str]:
         """Check min/max constraint compatibility between schemas.
 
         Args:
@@ -448,7 +462,7 @@ class GtsEntityCastResult:
         Returns:
             List of error messages
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         # Check minimum constraint
         old_min = old_schema.get(min_key)
@@ -489,10 +503,10 @@ class GtsEntityCastResult:
     @staticmethod
     def _check_constraint_compatibility(
         prop: str,
-        old_prop_schema: Dict[str, Any],
-        new_prop_schema: Dict[str, Any],
+        old_prop_schema: dict[str, Any],
+        new_prop_schema: dict[str, Any],
         check_tightening: bool = True,
-    ) -> List[str]:
+    ) -> list[str]:
         """Check if constraints are compatible between old and new property schemas.
 
         Args:
@@ -505,7 +519,7 @@ class GtsEntityCastResult:
         Returns:
             List of error messages
         """
-        errors: List[str] = []
+        errors: list[str] = []
         prop_type = old_prop_schema.get("type")
 
         # Numeric constraints (for number/integer types)
@@ -551,10 +565,10 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _check_schema_compatibility(
-        old_schema: Dict[str, Any],
-        new_schema: Dict[str, Any],
+        old_schema: dict[str, Any],
+        new_schema: dict[str, Any],
         check_backward: bool,
-    ) -> tuple[bool, List[str]]:
+    ) -> tuple[bool, list[str]]:
         """Unified compatibility checker for backward and forward compatibility.
 
         Args:
@@ -566,7 +580,7 @@ class GtsEntityCastResult:
         Returns:
             Tuple of (is_compatible, list_of_errors)
         """
-        errors: List[str] = []
+        errors: list[str] = []
 
         # Flatten schemas to handle allOf
         old_flat = GtsEntityCastResult._flatten_schema(old_schema)
@@ -647,9 +661,9 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _check_backward_compatibility(
-        old_schema: Dict[str, Any],
-        new_schema: Dict[str, Any],
-    ) -> tuple[bool, List[str]]:
+        old_schema: dict[str, Any],
+        new_schema: dict[str, Any],
+    ) -> tuple[bool, list[str]]:
         """Check if new schema is backward compatible with old schema.
 
         Backward compatibility: new consumers can read old data.
@@ -669,9 +683,9 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _check_forward_compatibility(
-        old_schema: Dict[str, Any],
-        new_schema: Dict[str, Any],
-    ) -> tuple[bool, List[str]]:
+        old_schema: dict[str, Any],
+        new_schema: dict[str, Any],
+    ) -> tuple[bool, list[str]]:
         """Check if new schema is forward compatible with old schema.
 
         Forward compatibility: old consumers can read new data.
@@ -690,12 +704,12 @@ class GtsEntityCastResult:
 
     @staticmethod
     def _diff_objects(
-        obj_a: Dict[str, Any],
-        obj_b: Dict[str, Any],
+        obj_a: dict[str, Any],
+        obj_b: dict[str, Any],
         base: str,
-        added: List[str],
-        removed: List[str],
-        changed: List[Dict[str, str]],
+        added: list[str],
+        removed: list[str],
+        changed: list[dict[str, str]],
     ) -> None:
         a_props = obj_a.get("properties", {}) if isinstance(obj_a, dict) else {}
         b_props = obj_b.get("properties", {}) if isinstance(obj_b, dict) else {}
@@ -736,16 +750,16 @@ class GtsEntityCastResult:
         return path if path else "root"
 
     @staticmethod
-    def _filtered(d: Dict[str, Any]) -> Dict[str, Any]:
+    def _filtered(d: dict[str, Any]) -> dict[str, Any]:
         exclude = ("properties", "required")
         return {k: v for k, v in d.items() if k not in exclude}
 
     @staticmethod
     def _only_optional_add_remove(
-        a: Dict[str, Any],
-        b: Dict[str, Any],
+        a: dict[str, Any],
+        b: dict[str, Any],
         path: str,
-        reasons: List[str],
+        reasons: list[str],
     ) -> bool:
         if not isinstance(a, dict) or not isinstance(b, dict):
             if a != b:
@@ -775,8 +789,8 @@ class GtsEntityCastResult:
             set(b.get("required", [])) if isinstance(b.get("required"), list) else set()
         )
         if a_req != b_req:
-            added_req = sorted(list(b_req - a_req))
-            removed_req = sorted(list(a_req - b_req))
+            added_req = sorted(b_req - a_req)
+            removed_req = sorted(a_req - b_req)
             if added_req:
                 reasons.append(
                     f"{GtsEntityCastResult._path_label(path)}: required added -> "

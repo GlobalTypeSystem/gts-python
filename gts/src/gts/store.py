@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Dict, Set, Tuple, List, Any, Optional, Iterator
+import logging
 import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from typing import Any
 
 from jsonschema import RefResolver
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from .gts import GtsID, GtsWildcard
+from . import compatibility, derivation, traits
 from .entities import GtsEntity
+from .gts import GtsID, GtsWildcard
 from .schema_cast import GtsEntityCastResult
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
-from . import compatibility
-from . import derivation
-from . import traits
 
-import logging
+logger = logging.getLogger(__name__)
 
 
 class StoreGtsObjectNotFound(Exception):
@@ -71,21 +71,18 @@ class GtsReader(ABC):
     @abstractmethod
     def __iter__(self) -> Iterator[GtsEntity]:
         """Return an iterator that yields JsonEntity objects."""
-        pass
 
     @abstractmethod
-    def read_by_id(self, entity_id: str) -> Optional[GtsEntity]:
+    def read_by_id(self, entity_id: str) -> GtsEntity | None:
         """
         Read a JsonEntity by its ID.
         Returns None if the entity is not found.
         Used for cache miss scenarios.
         """
-        pass
 
     @abstractmethod
     def reset(self) -> None:
         """Reset the iterator to start from the beginning."""
-        pass
 
 
 class GtsStoreQueryResult:
@@ -93,9 +90,9 @@ class GtsStoreQueryResult:
         self.error = ""
         self.count = 0
         self.limit = 0
-        self.results: List[Dict[str, Any]] = []
+        self.results: list[dict[str, Any]] = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         if self.error:
             return {"error": self.error, "count": self.count, "limit": self.limit}
         return {
@@ -114,14 +111,14 @@ class GtsStore:
         Args:
             reader: GtsReader instance to populate entities from
         """
-        self._by_id: Dict[str, GtsEntity] = {}
+        self._by_id: dict[str, GtsEntity] = {}
         self._reader = reader
 
         # Populate entities from reader if provided
         if self._reader:
             self._populate_from_reader()
 
-        logging.info(f"Populated GtsStore with {len(self._by_id)} entities")
+        logger.info(f"Populated GtsStore with {len(self._by_id)} entities")
 
     def _populate_from_reader(self) -> None:
         """Populate the store by iterating through the reader."""
@@ -157,7 +154,7 @@ class GtsStore:
         """Remove an entity from the in-memory registry if it is present."""
         self._by_id.pop(entity_id, None)
 
-    def register_schema(self, type_id: str, schema: Dict[str, Any]) -> None:
+    def register_schema(self, type_id: str, schema: dict[str, Any]) -> None:
         """
         Register a schema (legacy method for backward compatibility).
         Creates a JsonEntity from the schema dict.
@@ -169,7 +166,7 @@ class GtsStore:
         entity = GtsEntity(content=schema, gts_id=gts_id, is_schema=True)
         self._by_id[type_id] = entity
 
-    def get(self, entity_id: str) -> Optional[GtsEntity]:
+    def get(self, entity_id: str) -> GtsEntity | None:
         """
         Get a JsonEntity by its ID.
         If not found in cache, try to fetch from reader.
@@ -188,25 +185,24 @@ class GtsStore:
 
         return None
 
-    def get_schema_content(self, type_id: str) -> Dict[str, Any]:
+    def get_schema_content(self, type_id: str) -> dict[str, Any]:
         """Get schema content as dict (legacy method for backward compatibility)."""
         entity = self.get(type_id)
         if entity and isinstance(entity.content, dict):
             return entity.content
         raise KeyError(f"Schema not found: {type_id}")
 
-    def _create_ref_resolver(self, schema: Dict[str, Any]) -> RefResolver:
+    def _create_ref_resolver(self, schema: dict[str, Any]) -> RefResolver:
         """Create a custom RefResolver that can resolve GTS ID references from the store."""
 
-        def resolve_gts_ref(uri: str) -> Dict[str, Any]:
+        def resolve_gts_ref(uri: str) -> dict[str, Any]:
             """Resolve a GTS ID reference to its schema content."""
             # Issue #32: handle gts:// prefix
-            if uri.startswith("gts://"):
-                uri = uri[6:]
+            uri = uri.removeprefix("gts://")
             try:
                 return self.get_schema_content(uri)
-            except KeyError:
-                raise Exception(f"Unresolvable: {uri}")
+            except KeyError as e:
+                raise ValueError(f"Unresolvable: {uri}") from e
 
         # Create a store dict that maps GTS IDs to their schema content
         store = {}
@@ -236,7 +232,7 @@ class GtsStore:
         return self._by_id.items()
 
     @staticmethod
-    def _validate_schema_refs(schema: Dict[str, Any], path: str = "") -> None:
+    def _validate_schema_refs(schema: dict[str, Any], path: str = "") -> None:
         """
         Validate all $ref values in a schema.
 
@@ -306,7 +302,7 @@ class GtsStore:
         if not schema_entity.is_schema:
             raise ValueError(f"Entity '{gts_id}' is not a schema")
 
-        logging.info(f"Validating schema x-gts-ref fields for {gts_id}")
+        logger.info(f"Validating schema x-gts-ref fields for {gts_id}")
 
         # Validate x-gts-ref constraints in the schema
         x_gts_ref_validator = XGtsRefValidator(store=self)
@@ -315,12 +311,12 @@ class GtsStore:
             error_messages = [
                 f"{err.field_path}: {err.reason}" for err in x_gts_ref_errors
             ]
-            raise Exception(
+            raise ValueError(
                 f"Schema x-gts-ref validation failed: {'; '.join(error_messages)}"
             )
 
     @staticmethod
-    def _validate_gts_keywords(content: Dict[str, Any]) -> None:
+    def _validate_gts_keywords(content: dict[str, Any]) -> None:
         """Validate x-gts-final, x-gts-abstract, x-gts-traits, x-gts-traits-schema placement."""
 
         def _contains_key_recursive(value: Any, key: str) -> bool:
@@ -334,19 +330,17 @@ class GtsStore:
 
         # Validate x-gts-final
         final_val = content.get("x-gts-final")
-        if final_val is not None:
-            if not isinstance(final_val, bool):
-                raise ValueError(
-                    f"x-gts-final must be a boolean, got {type(final_val).__name__}"
-                )
+        if final_val is not None and not isinstance(final_val, bool):
+            raise ValueError(
+                f"x-gts-final must be a boolean, got {type(final_val).__name__}"
+            )
 
         # Validate x-gts-abstract
         abstract_val = content.get("x-gts-abstract")
-        if abstract_val is not None:
-            if not isinstance(abstract_val, bool):
-                raise ValueError(
-                    f"x-gts-abstract must be a boolean, got {type(abstract_val).__name__}"
-                )
+        if abstract_val is not None and not isinstance(abstract_val, bool):
+            raise ValueError(
+                f"x-gts-abstract must be a boolean, got {type(abstract_val).__name__}"
+            )
 
         # Mutual exclusion
         if final_val is True and abstract_val is True:
@@ -370,11 +364,11 @@ class GtsStore:
                     raise ValueError(f"{kw} must be at the schema top level")
 
     @staticmethod
-    def _content_is_abstract(content: Dict[str, Any]) -> bool:
+    def _content_is_abstract(content: dict[str, Any]) -> bool:
         return content.get("x-gts-abstract") is True
 
     @staticmethod
-    def _content_is_final(content: Dict[str, Any]) -> bool:
+    def _content_is_final(content: dict[str, Any]) -> bool:
         return content.get("x-gts-final") is True
 
     def _validate_schema_chain(self, gts_id: str) -> None:
@@ -402,13 +396,16 @@ class GtsStore:
             derived_entity = self.get(derived_id)
 
             # Check x-gts-final: if the base type is final, derivation is not allowed.
-            if base_entity and isinstance(base_entity.content, dict):
-                if self._content_is_final(base_entity.content):
-                    raise ValueError(
-                        f"base type '{base_id}' is final and cannot be extended"
-                    )
+            if (
+                base_entity
+                and isinstance(base_entity.content, dict)
+                and self._content_is_final(base_entity.content)
+            ):
+                raise ValueError(
+                    f"base type '{base_id}' is final and cannot be extended"
+                )
 
-            logging.info(
+            logger.info(
                 f"OP#12: Validating schema chain pair: base={base_id} derived={derived_id}"
             )
 
@@ -458,13 +455,13 @@ class GtsStore:
         )
 
     def _inline_refs(
-        self, node: Any, seen: Set[str], supports_ref_siblings: bool
+        self, node: Any, seen: set[str], supports_ref_siblings: bool
     ) -> Any:
         """Recursively inline $ref references, guarding against cycles."""
         if isinstance(node, dict):
             ref_uri = node.get("$ref")
             if isinstance(ref_uri, str):
-                ref_id: Optional[str] = None
+                ref_id: str | None = None
                 if ref_uri.startswith("gts://"):
                     ref_id = ref_uri[6:]
                 elif not ref_uri.startswith("#"):
@@ -507,19 +504,19 @@ class GtsStore:
             ]
         return node
 
-    def _build_effective_traits(self, gts_id: str) -> "traits.EffectiveTraits":
+    def _build_effective_traits(self, gts_id: str) -> traits.EffectiveTraits:
         """Build OP#13 EffectiveTraits by walking the type's chain (root -> leaf)."""
         gid = GtsID(gts_id)
         segments = gid.gts_id_segments
 
-        chain_ids: List[str] = []
+        chain_ids: list[str] = []
         prefix = "gts."
         for seg in segments:
             chain_ids.append(prefix + seg.segment)
             prefix = prefix + seg.segment
 
-        trait_schemas: List[Any] = []
-        merged_traits: Dict[str, Any] = {}
+        trait_schemas: list[Any] = []
+        merged_traits: dict[str, Any] = {}
 
         for schema_id in chain_ids:
             entity = self.get(schema_id)
@@ -527,7 +524,7 @@ class GtsStore:
                 continue
             content = entity.content
 
-            level_schemas: List[Any] = []
+            level_schemas: list[Any] = []
             traits.collect_trait_schema_from_value(content, level_schemas)
             for ts in level_schemas:
                 # Inline local JSON Pointer refs against the host document, then
@@ -535,7 +532,7 @@ class GtsStore:
                 inlined = traits.inline_local_pointers(ts, content)
                 trait_schemas.append(self._resolve_schema_refs(inlined))
 
-            level_traits: Dict[str, Any] = {}
+            level_traits: dict[str, Any] = {}
             traits.collect_traits_from_value(content, level_traits)
             traits.merge_rfc7396_into(merged_traits, level_traits)
 
@@ -578,16 +575,19 @@ class GtsStore:
 
         schema_content = schema_entity.content
         if not isinstance(schema_content, dict):
-            raise ValueError(f"Schema '{gts_id}' content must be a dictionary")
+            raise ValueError(  # noqa: TRY004 - keep ValueError for API compatibility
+                f"Schema '{gts_id}' content must be a dictionary"
+            )
 
         meta_schema_url = schema_content.get("$schema")
-        if meta_schema_url and isinstance(meta_schema_url, str):
-            if meta_schema_url.startswith("gts.") or meta_schema_url.startswith(
-                "gts://"
-            ):
-                raise ValueError(
-                    f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
-                )
+        if (
+            meta_schema_url
+            and isinstance(meta_schema_url, str)
+            and meta_schema_url.startswith(("gts.", "gts://"))
+        ):
+            raise ValueError(
+                f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
+            )
 
         # 1. Validate $ref fields
         self._validate_schema_refs(schema_content, "")
@@ -621,19 +621,22 @@ class GtsStore:
 
         schema_content = schema_entity.content
         if not isinstance(schema_content, dict):
-            raise ValueError(f"Schema '{gts_id}' content must be a dictionary")
+            raise ValueError(  # noqa: TRY004 - keep ValueError for API compatibility
+                f"Schema '{gts_id}' content must be a dictionary"
+            )
 
         # Issue #25: strict check, no GTS IDs in $schema
         meta_schema_url = schema_content.get("$schema")
-        if meta_schema_url and isinstance(meta_schema_url, str):
-            if meta_schema_url.startswith("gts.") or meta_schema_url.startswith(
-                "gts://"
-            ):
-                raise ValueError(
-                    f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
-                )
+        if (
+            meta_schema_url
+            and isinstance(meta_schema_url, str)
+            and meta_schema_url.startswith(("gts.", "gts://"))
+        ):
+            raise ValueError(
+                f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
+            )
 
-        logging.info(f"Validating schema {gts_id}")
+        logger.info(f"Validating schema {gts_id}")
 
         # 1. Validate $ref fields - must be local (#...) or gts:// URIs
         self._validate_schema_refs(schema_content, "")
@@ -658,9 +661,11 @@ class GtsStore:
             else:
                 Draft7Validator.check_schema(schema_content)
 
-            logging.info(f"Schema {gts_id} passed JSON Schema meta-schema validation")
+            logger.info(f"Schema {gts_id} passed JSON Schema meta-schema validation")
         except Exception as e:
-            raise Exception(f"JSON Schema validation failed for '{gts_id}': {str(e)}")
+            raise ValueError(
+                f"JSON Schema validation failed for '{gts_id}': {e!s}"
+            ) from e
 
         # 6. Validate traits (OP#13)
         is_abstract = self._content_is_abstract(schema_content)
@@ -687,8 +692,8 @@ class GtsStore:
             # Anonymous instance ID path: allow plain UUID and resolve by raw id.
             try:
                 _ = uuid.UUID(gts_id)
-            except Exception:
-                raise StoreGtsObjectNotFound(gts_id)
+            except Exception as e:
+                raise StoreGtsObjectNotFound(gts_id) from e
             obj = self.get(gts_id)
             lookup_id = gts_id
 
@@ -698,10 +703,10 @@ class GtsStore:
             raise StoreGtsSchemaForInstanceNotFound(lookup_id)
         try:
             schema = self.get_schema_content(obj.type_id)
-        except KeyError:
-            raise StoreGtsSchemaNotFound(obj.type_id)
+        except KeyError as e:
+            raise StoreGtsSchemaNotFound(obj.type_id) from e
 
-        logging.info(f"Validating instance {gts_id} against schema {obj.type_id}")
+        logger.info(f"Validating instance {gts_id} against schema {obj.type_id}")
 
         # Check if the schema is abstract - abstract types cannot have direct instances
         if isinstance(schema, dict) and self._content_is_abstract(schema):
@@ -725,7 +730,9 @@ class GtsStore:
             error_messages = [
                 f"{err.field_path}: {err.reason}" for err in x_gts_ref_errors
             ]
-            raise Exception(f"x-gts-ref validation failed: {'; '.join(error_messages)}")
+            raise ValueError(
+                f"x-gts-ref validation failed: {'; '.join(error_messages)}"
+            )
 
     def cast(
         self,
@@ -832,10 +839,10 @@ class GtsStore:
             full_verdict=full,
         )
 
-    def build_schema_graph(self, gts_id: str) -> Tuple[Dict[str, Set[str]], List[str]]:
+    def build_schema_graph(self, gts_id: str) -> tuple[dict[str, set[str]], list[str]]:
         seen_gts_ids = set()
 
-        def gts2node(gts_id: str, seen_gts_ids: Set[str]) -> str:
+        def gts2node(gts_id: str, seen_gts_ids: set[str]) -> str:
             ret = {"id": gts_id}
 
             if gts_id in seen_gts_ids:
@@ -870,7 +877,7 @@ class GtsStore:
 
         return gts2node(gts_id, seen_gts_ids)
 
-    def _parse_query_filters(self, filter_str: str) -> Dict[str, str]:
+    def _parse_query_filters(self, filter_str: str) -> dict[str, str]:
         """Parse filter expressions from query string.
 
         Args:
@@ -879,7 +886,7 @@ class GtsStore:
         Returns:
             Dictionary of filter key-value pairs
         """
-        filters: Dict[str, str] = {}
+        filters: dict[str, str] = {}
         if not filter_str:
             return filters
 
@@ -895,7 +902,7 @@ class GtsStore:
 
     def _validate_query_pattern(
         self, base_pattern: str, is_wildcard: bool
-    ) -> Tuple[Optional[GtsWildcard], Optional[GtsID], str]:
+    ) -> tuple[GtsWildcard | None, GtsID | None, str]:
         """Validate and parse the query pattern.
 
         Args:
@@ -907,7 +914,7 @@ class GtsStore:
         """
         if is_wildcard:
             # Wildcard pattern must end with .* or ~*
-            if not (base_pattern.endswith(".*") or base_pattern.endswith("~*")):
+            if not base_pattern.endswith((".*", "~*")):
                 return (
                     None,
                     None,
@@ -916,8 +923,8 @@ class GtsStore:
             try:
                 wildcard_pattern = GtsWildcard(base_pattern)
                 return wildcard_pattern, None, ""
-            except Exception as e:
-                return None, None, f"Invalid query: {str(e)}"
+            except Exception as e:  # noqa: BLE001 - error surfaced in return value
+                return None, None, f"Invalid query: {e!s}"
         else:
             # Non-wildcard pattern must be a complete valid GTS ID
             try:
@@ -925,16 +932,16 @@ class GtsStore:
                 if not exact_gts_id.gts_id_segments:
                     return None, None, "Invalid query: GTS ID has no valid segments"
                 return None, exact_gts_id, ""
-            except Exception as e:
-                return None, None, f"Invalid query: {str(e)}"
+            except Exception as e:  # noqa: BLE001 - error surfaced in return value
+                return None, None, f"Invalid query: {e!s}"
 
     def _matches_id_pattern(
         self,
         entity_id: GtsID,
         base_pattern: str,
         is_wildcard: bool,
-        wildcard_pattern: Optional[GtsWildcard],
-        exact_gts_id: Optional[GtsID],
+        wildcard_pattern: GtsWildcard | None,
+        exact_gts_id: GtsID | None,
     ) -> bool:
         """Check if entity ID matches the query pattern.
 
@@ -964,14 +971,13 @@ class GtsStore:
             try:
                 pattern_as_wildcard = GtsWildcard(base_pattern)
                 return entity_id.wildcard_match(pattern_as_wildcard)
-            except Exception:
-                # If it can't be converted to wildcard, fall back to exact match
+            except Exception:  # noqa: BLE001 - fall back to exact match
                 return entity_id.id == base_pattern
 
         return entity_id.id == base_pattern
 
     def _matches_filters(
-        self, entity_content: Dict[str, Any], filters: Dict[str, str]
+        self, entity_content: dict[str, Any], filters: dict[str, str]
     ) -> bool:
         """Check if entity content matches all filter criteria.
 
