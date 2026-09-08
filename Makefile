@@ -60,8 +60,11 @@ build: py-env
 	$(PYTHON) -m build --outdir dist ./gts
 
 # Install the locally built wheel, equivalent to installing the published gts package
-install-local: build
-	$(PYTHON) -m pip install --force-reinstall dist/gts-*.whl
+install-local:
+	@rm -rf dist/
+	$(PYTHON) -m pip install --upgrade build
+	$(PYTHON) -m build --outdir dist ./gts
+	$(PYTHON) -m pip install --no-deps --force-reinstall dist/gts-*.whl
 
 # Uninstall gts from the selected interpreter
 uninstall-local:
