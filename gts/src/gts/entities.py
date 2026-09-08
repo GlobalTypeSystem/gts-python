@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any
 
 from .gts import GtsID
 from .schema_cast import GtsEntityCastResult, SchemaCastError
@@ -16,13 +16,13 @@ class ValidationError:
     schemaPath: str
     keyword: str
     message: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
     data: Any | None = None
 
 
 @dataclass
 class ValidationResult:
-    errors: List[ValidationError] = field(default_factory=list)
+    errors: list[ValidationError] = field(default_factory=list)
 
 
 @dataclass
@@ -31,7 +31,7 @@ class GtsFile:
     name: str
     content: Any
     sequencesCount: int = 0
-    sequenceContent: Dict[int, Any] = field(default_factory=dict)
+    sequenceContent: dict[int, Any] = field(default_factory=dict)
     validation: ValidationResult = field(default_factory=ValidationResult)
 
     def __post_init__(self) -> None:
@@ -43,8 +43,8 @@ class GtsFile:
 
 @dataclass
 class GtsConfig:
-    entity_id_fields: List[str]
-    schema_id_fields: List[str]
+    entity_id_fields: list[str]
+    schema_id_fields: list[str]
 
 
 DEFAULT_GTS_CONFIG = GtsConfig(
@@ -74,33 +74,33 @@ DEFAULT_GTS_CONFIG = GtsConfig(
 
 @dataclass
 class GtsEntity:
-    gts_id: Optional[GtsID] = None
+    gts_id: GtsID | None = None
     is_schema: bool = False
-    file: Optional[GtsFile] = None
-    list_sequence: Optional[int] = None
+    file: GtsFile | None = None
+    list_sequence: int | None = None
     label: str = ""
     content: Any = None
-    gts_refs: List[Dict[str, str]] = field(default_factory=list)
+    gts_refs: list[dict[str, str]] = field(default_factory=list)
     validation: ValidationResult = field(default_factory=ValidationResult)
-    schemaId: Optional[str] = None
-    selected_entity_field: Optional[str] = None
-    selected_schema_id_field: Optional[str] = None
+    type_id: str | None = None
+    selected_entity_field: str | None = None
+    selected_type_id_field: str | None = None
     description: str = ""
-    raw_id: Optional[str] = None  # Stores raw ID value (may be non-GTS)
-    schemaRefs: List[Dict[str, str]] = field(default_factory=list)
+    raw_id: str | None = None  # Stores raw ID value (may be non-GTS)
+    schemaRefs: list[dict[str, str]] = field(default_factory=list)
 
     def __init__(
         self,
         *,
-        file: Optional[GtsFile] = None,
-        list_sequence: Optional[int] = None,
+        file: GtsFile | None = None,
+        list_sequence: int | None = None,
         content: Any = None,
-        cfg: Optional[GtsConfig] = None,
-        gts_id: Optional[GtsID] = None,
+        cfg: GtsConfig | None = None,
+        gts_id: GtsID | None = None,
         is_schema: bool = False,
         label: str = "",
-        validation: Optional[ValidationResult] = None,
-        schemaId: Optional[str] = None,
+        validation: ValidationResult | None = None,
+        type_id: str | None = None,
     ) -> None:
         self.file = file
         self.list_sequence = list_sequence
@@ -109,9 +109,9 @@ class GtsEntity:
         self.is_schema = is_schema
         self.label = label
         self.validation = validation or ValidationResult()
-        self.schemaId = schemaId
+        self.type_id = type_id
         self.selected_entity_field = None
-        self.selected_schema_id_field = None
+        self.selected_type_id_field = None
         self.gts_refs = []
         self.schemaRefs = []
         self.description = ""
@@ -124,11 +124,12 @@ class GtsEntity:
         if cfg is not None:
             idv = self._calc_json_entity_id(cfg)
             self.raw_id = idv  # Store raw ID even if non-GTS
-            self.schemaId = self._calc_json_schema_id(cfg)
+            self.type_id = self._calc_json_schema_id(cfg)
             # If no valid GTS ID found in entity fields, use schema ID as fallback
-            if not (idv and GtsID.is_valid(idv)):
-                if self.schemaId and GtsID.is_valid(self.schemaId):
-                    idv = self.schemaId
+            if not (idv and GtsID.is_valid(idv)) and (
+                self.type_id and GtsID.is_valid(self.type_id)
+            ):
+                idv = self.type_id
             self.gts_id = GtsID(idv) if idv and GtsID.is_valid(idv) else None
 
         # Set label
@@ -159,14 +160,10 @@ class GtsEntity:
         url = self.content.get("$schema")
         if not isinstance(url, str):
             return False
-        if url.startswith("http://json-schema.org/"):
-            return True
-        if url.startswith("https://json-schema.org/"):
-            return True
         # Issue #25: strict check, no GTS IDs in $schema
-        return False
+        return url.startswith(("http://json-schema.org/", "https://json-schema.org/"))
 
-    def resolve_path(self, path: str) -> "GtsPathResolver":
+    def resolve_path(self, path: str) -> GtsPathResolver:
         from .path_resolver import GtsPathResolver
 
         resolver = GtsPathResolver(self.gts_id.id if self.gts_id else "", self.content)
@@ -174,17 +171,20 @@ class GtsEntity:
 
     def cast(
         self,
-        to_schema: "GtsEntity",
-        from_schema: "GtsEntity",
-        resolver: Optional[Any] = None,
+        to_schema: GtsEntity,
+        from_schema: GtsEntity,
+        resolver: Any | None = None,
     ) -> GtsEntityCastResult:
-        if self.is_schema:
+        if (
+            self.is_schema
+            and from_schema.gts_id
+            and self.gts_id.id != from_schema.gts_id.id
+        ):
             # When casting a schema, from_schema might be a standard JSON Schema (no gts_id)
             # In that case, skip the sanity check
-            if from_schema.gts_id and self.gts_id.id != from_schema.gts_id.id:
-                raise SchemaCastError(
-                    f"Internal error: {self.gts_id.id} != {from_schema.gts_id.id}"
-                )
+            raise SchemaCastError(
+                f"Internal error: {self.gts_id.id} != {from_schema.gts_id.id}"
+            )
         if not to_schema.is_schema:
             raise SchemaCastError("Target must be a schema")
         if not from_schema.is_schema:
@@ -201,7 +201,7 @@ class GtsEntity:
     def _walk_and_collect(
         self,
         content: Any,
-        collector: List[Dict[str, str]],
+        collector: list[dict[str, str]],
         matcher: Any,  # Callable but avoiding import
     ) -> None:
         """Generic tree walker that collects matching nodes.
@@ -234,25 +234,24 @@ class GtsEntity:
         walk(content)
 
     def _deduplicate_by_id_and_path(
-        self, items: List[Dict[str, str]]
-    ) -> List[Dict[str, str]]:
+        self, items: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
         """Deduplicate items by their id and sourcePath."""
-        uniq: Dict[str, Dict[str, str]] = {}
+        uniq: dict[str, dict[str, str]] = {}
         for item in items:
             key = f"{item['id']}|{item['sourcePath']}"
             uniq[key] = item
         return list(uniq.values())
 
-    def _extract_gts_ids_with_paths(self) -> List[Dict[str, str]]:
+    def _extract_gts_ids_with_paths(self) -> list[dict[str, str]]:
         """Extract all GTS IDs from content with their paths."""
-        found: List[Dict[str, str]] = []
+        found: list[dict[str, str]] = []
 
-        def gts_id_matcher(node: Any, path: str) -> Optional[Dict[str, str]]:
+        def gts_id_matcher(node: Any, path: str) -> dict[str, str] | None:
             """Match GTS ID strings."""
             if isinstance(node, str):
                 val = node
-                if val.startswith("gts://"):
-                    val = val[6:]
+                val = val.removeprefix("gts://")
                 if GtsID.is_valid(val):
                     return {"id": val, "sourcePath": path or "root"}
             return None
@@ -260,17 +259,16 @@ class GtsEntity:
         self._walk_and_collect(self.content, found, gts_id_matcher)
         return self._deduplicate_by_id_and_path(found)
 
-    def _extract_ref_strings_with_paths(self) -> List[Dict[str, str]]:
+    def _extract_ref_strings_with_paths(self) -> list[dict[str, str]]:
         """Extract $ref strings with their paths (for schemas)."""
-        refs: List[Dict[str, str]] = []
+        refs: list[dict[str, str]] = []
 
-        def ref_matcher(node: Any, path: str) -> Optional[Dict[str, str]]:
+        def ref_matcher(node: Any, path: str) -> dict[str, str] | None:
             """Match $ref properties in dict nodes."""
             if isinstance(node, dict) and isinstance(node.get("$ref"), str):
                 val = node["$ref"]
                 # Issue #32: handle gts:// prefix
-                if val.startswith("gts://"):
-                    val = val[6:]
+                val = val.removeprefix("gts://")
                 ref_path = f"{path}.$ref" if path else "$ref"
                 return {"id": val, "sourcePath": ref_path}
             return None
@@ -278,19 +276,18 @@ class GtsEntity:
         self._walk_and_collect(self.content, refs, ref_matcher)
         return self._deduplicate_by_id_and_path(refs)
 
-    def _get_field_value(self, field: str) -> Optional[str]:
+    def _get_field_value(self, field: str) -> str | None:
         """Get string value from content field."""
         if not isinstance(self.content, dict):
             return None
         v = self.content.get(field)
         if isinstance(v, str) and v.strip():
             # Issue #31, #32: Handle gts:// prefix in fields (e.g. $id)
-            if v.startswith("gts://"):
-                v = v[6:]
+            v = v.removeprefix("gts://")
             return v
         return None
 
-    def _first_non_empty_field(self, fields: List[str]) -> Optional[Tuple[str, str]]:
+    def _first_non_empty_field(self, fields: list[str]) -> tuple[str, str] | None:
         """Find first non-empty field value in order.
 
         Returns the first non-empty string value without preferring GTS IDs.
@@ -311,7 +308,7 @@ class GtsEntity:
             return f"{self.file.path}#{self.list_sequence}"
         return self.file.path if self.file else ""
 
-    def _calc_json_schema_id(self, cfg: GtsConfig) -> Optional[str]:
+    def _calc_json_schema_id(self, cfg: GtsConfig) -> str | None:
         """Calculate schema_id based on entity type and content.
 
         Rules:
@@ -324,29 +321,18 @@ class GtsEntity:
             # Get entity ID (the $id field for schemas)
             idv = self._get_field_value("$id")
             if idv and GtsID.is_valid(idv):
-                # Check if it's a chained ID (derived schema)
-                last_tilde = idv.rfind("~")
+                # For schemas, a chained $id means derivation.
+                # type_id is the parent (everything up to the second-to-last '~').
+                # idv ends with '~' for schemas.
+                # Strip trailing '~' to find internal chain boundaries.
+                inner = idv.removesuffix("~")
+                last_tilde = inner.rfind("~")
                 if last_tilde > 0:
-                    # Find the previous segment (parent)
-                    parent_end = last_tilde
-                    # Check if there's another segment before this one
-                    prefix = idv[:parent_end]
-                    prev_tilde = prefix.rfind("~")
-                    if prev_tilde > 0:
-                        # Has a parent chain - return first segment (base type)
-                        self.selected_schema_id_field = "$id"
-                        return prefix[: prev_tilde + 1]
-                    else:
-                        # Single segment schema - base type, return $schema
-                        schema_val = self._get_field_value("$schema")
-                        if schema_val:
-                            self.selected_schema_id_field = "$schema"
-                            return schema_val
-            # Fallback to $schema for schemas
-            schema_val = self._get_field_value("$schema")
-            if schema_val:
-                self.selected_schema_id_field = "$schema"
-                return schema_val
+                    # Has at least 2 segments - return parent chain
+                    self.selected_type_id_field = "$id"
+                    return inner[: last_tilde + 1]
+            # Base schema (single segment) - no GTS parent type.
+            # The $schema URL is NOT a GTS Type Identifier.
             return None
 
         # PRIORITY 1: Check entity_id_fields for a GTS ID (gtsId, id, etc.)
@@ -362,53 +348,35 @@ class GtsEntity:
                 idv = entity_id_cand[1]
                 # If already a type id (ends with '~'), use it as-is
                 if idv.endswith("~"):
-                    self.selected_schema_id_field = entity_id_cand[0]
+                    self.selected_type_id_field = entity_id_cand[0]
                     return idv
                 # For chained IDs (well-known instances), extract schema:
                 # everything up to and including last '~'
                 last_tilde = idv.rfind("~")
                 if last_tilde > 0:
-                    self.selected_schema_id_field = entity_id_cand[0]
+                    self.selected_type_id_field = entity_id_cand[0]
                     return idv[: last_tilde + 1]
 
         # PRIORITY 2: Fall back to explicit schema_id_fields (type, gtsTid, etc.)
         # Only check these if no chained GTS ID was found in entity_id_fields
+        # NOTE: Only use these for instances (non-schemas) - schemas use $id chain
         cand = self._first_non_empty_field(cfg.schema_id_fields)
         if cand:
-            self.selected_schema_id_field = cand[0]
-            schema_id = cand[1]
-            # If schema_id is a chained GTS ID, extract parent (base type)
-            if GtsID.is_valid(schema_id):
-                last_tilde = schema_id.rfind("~")
-                if last_tilde > 0 and not schema_id.endswith("~"):
+            self.selected_type_id_field = cand[0]
+            type_id_val = cand[1]
+            # If type_id is a chained GTS ID, extract parent (base type)
+            if GtsID.is_valid(type_id_val):
+                last_tilde = type_id_val.rfind("~")
+                if last_tilde > 0 and not type_id_val.endswith("~"):
                     # It's an instance ID in type field - extract schema part
-                    return schema_id[: last_tilde + 1]
-            return schema_id
+                    return type_id_val[: last_tilde + 1]
+            return type_id_val
 
         # No schema reference found for instance
         return None
 
-    def _extract_uuid_from_content(self) -> Optional[str]:
-        """Extract a UUID value from content to use as instance identifier."""
-        if not isinstance(self.content, dict):
-            return None
-        # Look for common UUID fields
-        for field_name in ["id", "uuid", "instanceId", "instance_id"]:
-            val = self.content.get(field_name)
-            if isinstance(val, str) and val.strip():
-                # Check if it looks like a UUID (basic check)
-                import re
-
-                if re.match(
-                    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
-                    val.lower(),
-                ):
-                    # Convert UUID to a valid GTS segment format
-                    return val.replace("-", "_")
-        return None
-
-    def get_graph(self) -> Dict[str, Set[str]]:
+    def get_graph(self) -> dict[str, set[str]]:
         refs = {}
         for r in self.gts_refs:
             refs[r["sourcePath"]] = r["id"]
-        return {"id": self.gts_id.id, "schema_id": self.schemaId, "refs": refs}
+        return {"id": self.gts_id.id, "type_id": self.type_id, "refs": refs}

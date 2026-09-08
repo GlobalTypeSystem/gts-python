@@ -241,3 +241,45 @@ class TestGtsIDEdgeCases:
         """Test that underscores are allowed in tokens."""
         gts_id = GtsID("gts.my_vendor.my_package.my_namespace.my_type.v1~")
         assert gts_id.gts_id_segments[0].vendor == "my_vendor"
+
+    def test_combined_anonymous_id_uses_embedded_uuid(self):
+        embedded_uuid = "7a1d2f34-5678-49ab-9012-abcdef123456"
+        gts_id = GtsID(
+            "gts.vendor.package.namespace.type.v1~" + embedded_uuid
+        )
+
+        assert gts_id.uuid_tail == embedded_uuid
+        assert gts_id.to_uuid() == uuid.UUID(embedded_uuid)
+        assert len(gts_id.gts_id_segments) == 2
+
+    @pytest.mark.parametrize(
+        "segment",
+        [
+            "vendor.package.namespace.type.v01",
+            "vendor.package.namespace.type.v1.01",
+            "vendor.package.namespace.type.v-1",
+        ],
+    )
+    def test_rejects_noncanonical_versions(self, segment):
+        with pytest.raises(GtsInvalidSegment):
+            GtsIdSegment(1, 0, segment)
+
+    def test_query_helpers_parse_and_match_filters(self):
+        gts_id = GtsID(
+            "gts.vendor.package.namespace.type.v1~vendor.package.namespace.item.v1"
+        )
+        base, filters = gts_id.parse_query(
+            'gts.vendor.package.namespace.type.v1~[status="active"]'
+        )
+
+        assert base == "gts.vendor.package.namespace.type.v1~"
+        assert filters == {"status": "active"}
+        assert gts_id.match_query(
+            {"gtsId": gts_id.id, "status": "active"},
+            "gtsId",
+            'gts.vendor.package.namespace.type.v1~[status="active"]',
+        )
+
+    def test_split_at_path_rejects_empty_selector(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            GtsID.split_at_path("gts.vendor.package.namespace.type.v1~@")

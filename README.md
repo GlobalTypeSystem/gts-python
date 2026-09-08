@@ -6,6 +6,8 @@ A minimal, idiomatic Python library for working with **GTS** ([Global Type Syste
 
 ## Roadmap
 
+Current supported GTS spec version: 0.13
+
 Featureset:
 
 - [x] **OP#1 - ID Validation**: Verify identifier syntax using regex patterns
@@ -22,7 +24,8 @@ Featureset:
 - [x] **OP#9 - Version Casting**: Transform instances between compatible MINOR versions
 - [x] **OP#10 - Query Execution**: Filter identifier collections using the GTS query language
 - [x] **OP#11 - Attribute Access**: Retrieve property values and metadata using the attribute selector (`@`)
-- [ ] **OP#12 - Schema Validation**: Validate schema against its precedent schema
+- [x] **OP#12 - Type Derivation Validation**: Validate that derived GTS Type Schemas correctly extend their base chain
+- [x] **OP#13 - Schema Traits Validation**: Validate schema traits (`x-gts-traits-schema` / `x-gts-traits`).
 
 See details in [gts/README.md](gts/README.md)
 
@@ -32,26 +35,46 @@ Other GTS spec [Reference Implementation](https://github.com/globaltypesystem/gt
 - [x] **CLI** - command-line interface for all GTS operations
 - [x] **Web server** - a non-production web-server with REST API for the operations processing and testing
 - [x] **x-gts-ref support** - to support special GTS entity reference annotation in schemas
-- [ ] **YAML support** - to support YAML files (*.yml, *.yaml) as input files
-- [ ] **TypeSpec support** - add [typespec.io](https://typespec.io/) files (*.tsp) support
-- [ ] **UUID for instances** - to support UUID as ID in JSON instances
+- [x] **YAML support** - to support YAML files (*.yml, *.yaml) as input files
+- [x] **UUID for instances** - to support UUID as ID in JSON instances
+- [ ] **TypeSpec support** - direct support for [typespec.io](https://typespec.io/) files (*.tsp) input files
 
 Technical Backlog:
 
-- [ ] **Code coverage** - target is 90%
-- [ ] **Documentation** - add documentation for all the features
-- [ ] **Interface** - export publicly available interface and keep cli and others private
-- [ ] **Server API** - finalise the server API
-- [ ] **Final code cleanup** - remove unused code, denormalize, add critical comments, etc.
+- [x] **Code coverage** - target is 90%
+- [x] **Documentation** - add documentation for all the features
+- [x] **Interface** - export publicly available interface and keep cli and others private
+- [x] **Server API** - finalise the server API
+- [x] **Final code cleanup** - remove unused code, denormalize, add critical comments, etc.
 
 ## Installation
 
-```bash
-# install in editable mode
-pip install -e ./gts
+GTS requires Python 3.9 or later.
 
-# install from PyPI, not supported yet
-# pip install gts
+### Local development
+
+From the repository root, build and install the same wheel artifact that will later be published and installed with `pip install gts`. `install-local` requires an explicit `PYTHON` environment variable so you choose the target interpreter:
+
+```bash
+PYTHON=.venv/bin/python make install-local
+```
+
+This creates the `.venv` virtual environment when needed, writes source and wheel distributions to `dist/`, and installs the wheel into the interpreter specified by `PYTHON`. Activate it to use the locally installed library and CLI:
+
+```bash
+source .venv/bin/activate
+python -c "import gts; print(gts.__file__)"
+gts --help
+```
+
+Use `make build` when you only need the distributable artifacts. Remove the locally installed package with `PYTHON=.venv/bin/python make uninstall-local`. For an editable installation while changing source files, use `make install`.
+
+### Published package
+
+After `gts` is published to PyPI, install it with:
+
+```bash
+pip install gts
 ```
 
 ## Usage

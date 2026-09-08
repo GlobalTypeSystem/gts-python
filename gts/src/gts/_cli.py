@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import json
+import logging
 import sys
-from typing import List
 
+from ._server import GtsHttpServer
 from .ops import GtsOps
-from .server import GtsHttpServer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: List[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -129,9 +128,9 @@ def main(argv: List[str] | None = None) -> None:
         elif args.op == "openapi-spec":
             server = GtsHttpServer(ops=ops)
             spec = server.app.openapi()
-            with open(getattr(args, "out"), "w", encoding="utf-8") as f:
+            with open(args.out, "w", encoding="utf-8") as f:
                 json.dump(spec, f, ensure_ascii=False, indent=2)
-            out = {"ok": True, "out": getattr(args, "out")}
+            out = {"ok": True, "out": args.out}
             json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
             sys.stdout.write("\n")
             return

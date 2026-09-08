@@ -3,18 +3,19 @@ from __future__ import annotations
 import re
 import shlex
 import uuid
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Any
 
 GTS_PREFIX = "gts."
 GTS_URI_PREFIX = "gts://"
 GTS_NS = uuid.uuid5(uuid.NAMESPACE_URL, "gts")
 GTS_SEGMENT_TOKEN_REGEX = re.compile(r"^[a-z_][a-z0-9_]*$")
+UUID_REGEX = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 class GtsInvalidSegment(ValueError):
-    def __init__(
-        self, num: int, offset: int, segment: str, cause: Optional[str] = None
-    ):
+    def __init__(self, num: int, offset: int, segment: str, cause: str | None = None):
         if cause:
             super().__init__(
                 f"Invalid GTS segment #{num} @ offset {offset}: '{segment}': {cause}"
@@ -30,7 +31,7 @@ class GtsInvalidSegment(ValueError):
 
 
 class GtsInvalidId(ValueError):
-    def __init__(self, gts_id: str, cause: Optional[str] = None):
+    def __init__(self, gts_id: str, cause: str | None = None):
         if cause:
             super().__init__(f"Invalid GTS identifier: {gts_id}: {cause}")
         else:
@@ -40,7 +41,7 @@ class GtsInvalidId(ValueError):
 
 
 class GtsInvalidWildcard(ValueError):
-    def __init__(self, pattern: str, cause: Optional[str] = None):
+    def __init__(self, pattern: str, cause: str | None = None):
         if cause:
             super().__init__(f"Invalid GTS wildcard pattern: {pattern}: {cause}")
         else:
@@ -66,7 +67,7 @@ class GtsIdSegment:
         self.namespace: str = ""
         self.type: str = ""
         self.ver_major: int = 0
-        self.ver_minor: Optional[int] = None
+        self.ver_minor: int | None = None
         self.is_type: bool = False
         self.is_wildcard: bool = False
 
@@ -91,7 +92,7 @@ class GtsIdSegment:
             if len(tokens) < 5:
                 raise GtsInvalidSegment(num, offset, segment, "Too few tokens")
 
-            for t in range(0, 4):
+            for t in range(4):
                 if not GTS_SEGMENT_TOKEN_REGEX.match(tokens[t]):
                     raise GtsInvalidSegment(
                         num, offset, segment, "Invalid segment token: " + tokens[t]
@@ -167,21 +168,35 @@ class GtsIdSegment:
                     num, offset, segment, "Minor version must be an integer"
                 )
 
+    @classmethod
+    def _uuid_tail_segment(cls, num: int, offset: int, uuid_str: str) -> GtsIdSegment:
+        """Create a special UUID tail segment for combined anonymous instances."""
+        seg = object.__new__(cls)
+        seg.num = num
+        seg.offset = offset
+        seg.segment = uuid_str
+        seg.vendor = ""
+        seg.package = ""
+        seg.namespace = ""
+        seg.type = ""
+        seg.ver_major = None
+        seg.ver_minor = None
+        seg.is_type = False
+        seg.is_wildcard = False
+        seg._is_uuid_tail = True
+        return seg
+
 
 class GtsID:
     def __init__(self, id: str):
         raw = id.strip()
 
         # Strip gts:// URI prefix if present
-        if raw.startswith(GTS_URI_PREFIX):
-            raw = raw[len(GTS_URI_PREFIX) :]
+        raw = raw.removeprefix(GTS_URI_PREFIX)
 
         # Validate it's lower case
         if raw != raw.lower():
             raise GtsInvalidId(id, "Must be lower case")
-
-        if "-" in raw:
-            raise GtsInvalidId(id, "Must not contain '-'")
 
         if not raw.startswith(GTS_PREFIX):
             raise GtsInvalidId(id, f"Does not start with '{GTS_PREFIX}'")
@@ -189,21 +204,47 @@ class GtsID:
             raise GtsInvalidId(id, "Too long")
 
         self.id: str = raw
-        self.gts_id_segments: List[GtsIdSegment] = []
+        self.gts_id_segments: list[GtsIdSegment] = []
+        self.uuid_tail: str | None = None
+
+        # Detect combined anonymous instance: last tilde-part is a UUID
+        remainder = raw[len(GTS_PREFIX) :]
+        tilde_parts = remainder.split("~")
+        last_part = tilde_parts[-1] if tilde_parts else ""
+        if UUID_REGEX.match(last_part) and len(tilde_parts) >= 2:
+            self.uuid_tail = last_part
+            # Hyphens are only allowed in the UUID tail
+            segments_portion = raw[: len(raw) - len(last_part) - 1]  # strip ~<uuid>
+            if "-" in segments_portion:
+                raise GtsInvalidId(id, "Must not contain '-'")
+        else:
+            if "-" in raw:
+                raise GtsInvalidId(id, "Must not contain '-'")
 
         # split preserving empties to detect trailing '~'
         _parts = raw[len(GTS_PREFIX) :].split("~")
-        parts = []
-        for i in range(0, len(_parts)):
-            if i < len(_parts) - 1:
+
+        # If UUID tail, exclude it from segment parsing
+        if self.uuid_tail:
+            # All parts before UUID are type segments (end with ~)
+            seg_count = len(_parts) - 1  # exclude UUID tail
+            parts = []
+            for i in range(seg_count):
+                if _parts[i] == "":
+                    raise GtsInvalidId(id, f"GTS segment #{i + 1} is empty")
                 parts.append(_parts[i] + "~")
-                if i == len(_parts) - 2 and _parts[i + 1] == "":
-                    break
-            else:
-                parts.append(_parts[i])
+        else:
+            parts = []
+            for i in range(len(_parts)):
+                if i < len(_parts) - 1:
+                    parts.append(_parts[i] + "~")
+                    if i == len(_parts) - 2 and _parts[i + 1] == "":
+                        break
+                else:
+                    parts.append(_parts[i])
 
         offset = len(GTS_PREFIX)
-        for i in range(0, len(parts)):
+        for i in range(len(parts)):
             if parts[i] == "":
                 raise GtsInvalidId(
                     id, f"GTS segment #{i + 1} @ offset {offset} is empty"
@@ -212,41 +253,59 @@ class GtsID:
             self.gts_id_segments.append(GtsIdSegment(i + 1, offset, parts[i]))
             offset += len(parts[i])
 
+        # Add UUID tail as a special segment if present
+        if self.uuid_tail:
+            self.gts_id_segments.append(
+                GtsIdSegment._uuid_tail_segment(
+                    len(self.gts_id_segments) + 1, offset, self.uuid_tail
+                )
+            )
+
         # Issue #37: Single-segment instance IDs are not allowed
         # An instance ID (not ending with ~) must be chained (have at least 2 segments)
-        if not self.id.endswith("~") and len(self.gts_id_segments) == 1:
+        # UUID tail is exempt
+        non_uuid_segments = [
+            s for s in self.gts_id_segments if not getattr(s, "_is_uuid_tail", False)
+        ]
+        if (
+            not self.id.endswith("~")
+            and self.uuid_tail is None
+            and len(non_uuid_segments) == 1
+            and not any(seg.is_wildcard for seg in self.gts_id_segments)
+        ):
             # Check if it's a wildcard (wildcards are allowed as single segment)
-            if not any(seg.is_wildcard for seg in self.gts_id_segments):
-                raise GtsInvalidId(
-                    id,
-                    "Single-segment instance IDs are not allowed. "
-                    "Instance IDs must be chained (e.g., type~instance).",
-                )
+            raise GtsInvalidId(
+                id,
+                "Single-segment instance IDs are not allowed. "
+                "Instance IDs must be chained (e.g., type~instance).",
+            )
 
     @property
     def is_type(self) -> bool:
         return self.id.endswith("~")
 
-    def get_type_id(self) -> Optional[str]:
+    def get_type_id(self) -> str | None:
         if len(self.gts_id_segments) < 2:
             return None
         return GTS_PREFIX + "".join([s.segment for s in self.gts_id_segments[:-1]])
 
     def to_uuid(self) -> uuid.UUID:
+        # For combined anonymous instances, return the embedded UUID directly
+        if self.uuid_tail:
+            return uuid.UUID(self.uuid_tail)
         return uuid.uuid5(GTS_NS, self.id)
 
     @classmethod
     def is_valid(cls, s: str) -> bool:
         # Strip gts:// URI prefix if present
         normalized = s
-        if normalized.startswith(GTS_URI_PREFIX):
-            normalized = normalized[len(GTS_URI_PREFIX) :]
+        normalized = normalized.removeprefix(GTS_URI_PREFIX)
         if not normalized.startswith(GTS_PREFIX):
             return False
         try:
             _ = cls(s)
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 - any parsing failure means invalid ID
             return False
 
     def wildcard_match(self, pattern: GtsWildcard) -> bool:
@@ -254,8 +313,19 @@ class GtsID:
 
         # Helper function to match segments with version flexibility
         def match_segments(
-            pattern_segs: List[GtsIdSegment], candidate_segs: List[GtsIdSegment]
+            pattern_segs: list[GtsIdSegment], candidate_segs: list[GtsIdSegment]
         ) -> bool:
+            # Pattern ending with '~*' means "this type and any descendants".
+            # It should match both:
+            # - the base type itself (same prefix, no extra segment), and
+            # - instances/derived ids under that prefix.
+            if (
+                pattern_segs
+                and pattern_segs[-1].is_wildcard
+                and len(pattern_segs) == len(candidate_segs) + 1
+            ):
+                return match_segments(pattern_segs[:-1], candidate_segs)
+
             # If pattern is longer than candidate, no match
             if len(pattern_segs) > len(candidate_segs):
                 return False
@@ -274,19 +344,18 @@ class GtsID:
                         return False
                     if p_seg.type and p_seg.type != c_seg.type:
                         return False
-                    # Check version fields if they are set in the pattern
-                    if p_seg.ver_major != 0 and p_seg.ver_major != c_seg.ver_major:
+                    # Check version fields when version is explicitly present in
+                    # the wildcard segment (including v0.*).
+                    if ".v" in p_seg.segment and p_seg.ver_major != c_seg.ver_major:
                         return False
                     if (
                         p_seg.ver_minor is not None
                         and p_seg.ver_minor != c_seg.ver_minor
                     ):
                         return False
-                    # Check is_type flag if set
-                    if p_seg.is_type and p_seg.is_type != c_seg.is_type:
-                        return False
-                    # Wildcard matches - accept anything after this point
-                    return True
+                    # Check is_type flag if set; if it doesn't match, wildcard fails,
+                    # otherwise wildcard matches - accept anything after this point
+                    return not (p_seg.is_type and p_seg.is_type != c_seg.is_type)
 
                 # Non-wildcard segment - all fields must match exactly
                 # Check vendor, package, namespace, type match
@@ -306,9 +375,8 @@ class GtsID:
 
                 # Minor version: if pattern has no minor version, accept any minor in candidate
                 # If pattern has minor version, it must match exactly
-                if p_seg.ver_minor is not None:
-                    if p_seg.ver_minor != c_seg.ver_minor:
-                        return False
+                if p_seg.ver_minor is not None and p_seg.ver_minor != c_seg.ver_minor:
+                    return False
                 # else: pattern has no minor version, so any minor version in candidate is OK
 
                 # Check is_type flag matches
@@ -330,10 +398,10 @@ class GtsID:
         # Use segment matching for wildcard patterns too
         return match_segments(pattern.gts_id_segments, self.gts_id_segments)
 
-    def parse_query(self, expr: str) -> Tuple[str, Dict[str, str]]:
+    def parse_query(self, expr: str) -> tuple[str, dict[str, str]]:
         base, _, filt = expr.partition("[")
         gts_base = base.strip()
-        conditions: Dict[str, str] = {}
+        conditions: dict[str, str] = {}
         if filt:
             filt = filt.rsplit("]", 1)[0]
             tokens = shlex.split(filt)
@@ -343,7 +411,7 @@ class GtsID:
                     conditions[k.strip()] = v.strip().strip('"')
         return gts_base, conditions
 
-    def match_query(self, obj: Dict[str, Any], gts_field: str, expr: str) -> bool:
+    def match_query(self, obj: dict[str, Any], gts_field: str, expr: str) -> bool:
         gts_base, cond = self.parse_query(expr)
         if not self.id.startswith(gts_base):
             return False
@@ -356,7 +424,7 @@ class GtsID:
         return True
 
     @classmethod
-    def split_at_path(cls, gts_with_path: str) -> Tuple[str, Optional[str]]:
+    def split_at_path(cls, gts_with_path: str) -> tuple[str, str | None]:
         if "@" not in gts_with_path:
             return gts_with_path, None
         gts, path = gts_with_path.split("@", 1)
