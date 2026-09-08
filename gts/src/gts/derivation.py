@@ -207,7 +207,11 @@ def _collect_disabled_base_properties(
     if not isinstance(derived_props, dict):
         return
     for name, derived_property in derived_props.items():
-        if derived_property is False and isinstance(base_props, dict) and name in base_props:
+        if (
+            derived_property is False
+            and isinstance(base_props, dict)
+            and name in base_props
+        ):
             errors.append(
                 f"property '{name}': derived schema '{derived_id}' disables property "
                 f"defined in base '{base_id}'"
@@ -335,9 +339,7 @@ def _merge_flat(target: Dict[str, Any], source: Dict[str, Any]) -> None:
                     and isinstance(props[name], dict)
                     and isinstance(prop_schema, dict)
                 ):
-                    props[name] = flatten_schema(
-                        {"allOf": [props[name], prop_schema]}
-                    )
+                    props[name] = flatten_schema({"allOf": [props[name], prop_schema]})
                 else:
                     props[name] = copy.deepcopy(prop_schema)
         elif key == "required" and isinstance(value, list):

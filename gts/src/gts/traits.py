@@ -122,7 +122,9 @@ def inline_local_pointers(fragment: Any, root: Any, depth: int = 0) -> Any:
                         if k != "$ref":
                             resolved[k] = inline_local_pointers(v, root, depth + 1)
                 return resolved
-        return {k: inline_local_pointers(v, root, depth + 1) for k, v in fragment.items()}
+        return {
+            k: inline_local_pointers(v, root, depth + 1) for k, v in fragment.items()
+        }
     if isinstance(fragment, list):
         return [inline_local_pointers(item, root, depth + 1) for item in fragment]
     return copy.deepcopy(fragment)
@@ -304,11 +306,15 @@ def _validate_trait_schema_integrity(resolved_trait_schemas: List[Any]) -> List[
     return []
 
 
-def _validate_trait_schema_compatibility(resolved_trait_schemas: List[Any]) -> List[str]:
+def _validate_trait_schema_compatibility(
+    resolved_trait_schemas: List[Any],
+) -> List[str]:
     errors: List[str] = []
     for i in range(1, len(resolved_trait_schemas)):
         ancestor_schema = build_effective_traits_schema(resolved_trait_schemas[:i])
-        descendant_schema = build_effective_traits_schema(resolved_trait_schemas[: i + 1])
+        descendant_schema = build_effective_traits_schema(
+            resolved_trait_schemas[: i + 1]
+        )
         for err in derivation.validate_derivation(
             ancestor_schema,
             descendant_schema,
@@ -347,7 +353,9 @@ def _validate_traits_against_schema(
     trait_schema: Any, effective_traits: Any, check_unresolved: bool
 ) -> List[str]:
     errors: List[str] = []
-    validation_schema = trait_schema if check_unresolved else _strip_required(trait_schema)
+    validation_schema = (
+        trait_schema if check_unresolved else _strip_required(trait_schema)
+    )
 
     try:
         cls = validator_for(validation_schema)
@@ -371,7 +379,9 @@ def _validate_traits_against_schema(
         has_default = isinstance(prop_schema, dict) and "default" in prop_schema
         if not has_value and not has_default:
             expected_type = "any"
-            if isinstance(prop_schema, dict) and isinstance(prop_schema.get("type"), str):
+            if isinstance(prop_schema, dict) and isinstance(
+                prop_schema.get("type"), str
+            ):
                 expected_type = prop_schema["type"]
             errors.append(
                 f"trait property '{prop_name}' (type: {expected_type}) is not "

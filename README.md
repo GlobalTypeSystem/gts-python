@@ -67,7 +67,7 @@ python -c "import gts; print(gts.__file__)"
 gts --help
 ```
 
-Use `make build` when you only need the distributable artifacts. For an editable installation while changing source files, use `make install`.
+Use `make build` when you only need the distributable artifacts. Remove the locally installed package with `PYTHON=.venv/bin/python make uninstall-local`. For an editable installation while changing source files, use `make install`.
 
 ### Published package
 

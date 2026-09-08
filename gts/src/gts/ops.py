@@ -358,7 +358,9 @@ class GtsOps:
             # Instance must have an id from entity_id_fields (not just derived from schema)
             if not entity.raw_id or not entity.selected_entity_field:
                 return GtsAddEntityResult(
-                    ok=False, error="Instance must have an id field", is_type_schema=False
+                    ok=False,
+                    error="Instance must have an id field",
+                    is_type_schema=False,
                 )
 
         # Schemas MUST have a valid GTS ID
@@ -440,7 +442,11 @@ class GtsOps:
                 )
         except Exception as e:
             return GtsIdValidationResult(
-                id=gts_id, valid=False, error=str(e), is_type=None, is_wildcard=is_wildcard
+                id=gts_id,
+                valid=False,
+                error=str(e),
+                is_type=None,
+                is_wildcard=is_wildcard,
             )
 
     def parse_id(self, gts_id: str) -> GtsIdParseResult:
@@ -534,7 +540,9 @@ class GtsOps:
         try:
             parsed = GtsID(gts_id)
         except Exception as e:
-            return GtsEntityValidationResult(id=gts_id, ok=False, entity_type="", error=str(e))
+            return GtsEntityValidationResult(
+                id=gts_id, ok=False, entity_type="", error=str(e)
+            )
 
         if parsed.is_type:
             entity_type = "schema"

@@ -336,21 +336,32 @@ class GtsStore:
         final_val = content.get("x-gts-final")
         if final_val is not None:
             if not isinstance(final_val, bool):
-                raise ValueError(f"x-gts-final must be a boolean, got {type(final_val).__name__}")
+                raise ValueError(
+                    f"x-gts-final must be a boolean, got {type(final_val).__name__}"
+                )
 
         # Validate x-gts-abstract
         abstract_val = content.get("x-gts-abstract")
         if abstract_val is not None:
             if not isinstance(abstract_val, bool):
-                raise ValueError(f"x-gts-abstract must be a boolean, got {type(abstract_val).__name__}")
+                raise ValueError(
+                    f"x-gts-abstract must be a boolean, got {type(abstract_val).__name__}"
+                )
 
         # Mutual exclusion
         if final_val is True and abstract_val is True:
-            raise ValueError("schema cannot declare both x-gts-final and x-gts-abstract as true")
+            raise ValueError(
+                "schema cannot declare both x-gts-final and x-gts-abstract as true"
+            )
 
         # Check that x-gts-final/x-gts-abstract/x-gts-traits/x-gts-traits-schema
         # appear only at the top level
-        top_level_keywords = {"x-gts-final", "x-gts-abstract", "x-gts-traits", "x-gts-traits-schema"}
+        top_level_keywords = {
+            "x-gts-final",
+            "x-gts-abstract",
+            "x-gts-traits",
+            "x-gts-traits-schema",
+        }
         for key, value in content.items():
             if key in top_level_keywords:
                 continue
@@ -397,12 +408,18 @@ class GtsStore:
                         f"base type '{base_id}' is final and cannot be extended"
                     )
 
-            logging.info(f"OP#12: Validating schema chain pair: base={base_id} derived={derived_id}")
+            logging.info(
+                f"OP#12: Validating schema chain pair: base={base_id} derived={derived_id}"
+            )
 
             if not base_entity or not isinstance(base_entity.content, dict):
-                raise ValueError(f"Base schema '{base_id}' not found for chain validation")
+                raise ValueError(
+                    f"Base schema '{base_id}' not found for chain validation"
+                )
             if not derived_entity or not isinstance(derived_entity.content, dict):
-                raise ValueError(f"Derived schema '{derived_id}' not found for chain validation")
+                raise ValueError(
+                    f"Derived schema '{derived_id}' not found for chain validation"
+                )
 
             # Resolve both schemas (inline $refs)
             base_resolved = self._resolve_schema_refs(base_entity.content)
@@ -428,6 +445,7 @@ class GtsStore:
         schema unprovable, which is the intended admission failure.
         """
         import copy
+
         return self._inline_refs(
             copy.deepcopy(schema), set(), self._supports_ref_siblings(schema)
         )
@@ -460,6 +478,7 @@ class GtsStore:
                     except KeyError:
                         return node  # Leave unresolved
                     import copy
+
                     resolved = self._inline_refs(
                         copy.deepcopy(ref_schema),
                         seen | {ref_id},
@@ -472,7 +491,9 @@ class GtsStore:
                         return {
                             "allOf": [
                                 resolved,
-                                self._inline_refs(siblings, seen, supports_ref_siblings),
+                                self._inline_refs(
+                                    siblings, seen, supports_ref_siblings
+                                ),
                             ]
                         }
                     return resolved
@@ -561,7 +582,9 @@ class GtsStore:
 
         meta_schema_url = schema_content.get("$schema")
         if meta_schema_url and isinstance(meta_schema_url, str):
-            if meta_schema_url.startswith("gts.") or meta_schema_url.startswith("gts://"):
+            if meta_schema_url.startswith("gts.") or meta_schema_url.startswith(
+                "gts://"
+            ):
                 raise ValueError(
                     f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
                 )

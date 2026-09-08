@@ -37,8 +37,7 @@ def _without_x_gts_ref(schema: Any) -> Any:
 
 def _is_x_gts_ref_only_combinator(branches: List[Any]) -> bool:
     return bool(branches) and all(
-        isinstance(_without_x_gts_ref(branch), dict)
-        and not _without_x_gts_ref(branch)
+        isinstance(_without_x_gts_ref(branch), dict) and not _without_x_gts_ref(branch)
         for branch in branches
     )
 
@@ -105,10 +104,16 @@ class XGtsRefValidator:
             one_of = sch.get("oneOf")
             if isinstance(one_of, list):
                 if _is_x_gts_ref_only_combinator(one_of):
-                    branch_errors = [_validate_branch(inst, branch, path) for branch in one_of]
+                    branch_errors = [
+                        _validate_branch(inst, branch, path) for branch in one_of
+                    ]
                     matching = sum(not branch for branch in branch_errors)
                     if matching == 0:
-                        errs.append(XGtsRefValidationError(path, inst, "", "oneOf: no branch matched"))
+                        errs.append(
+                            XGtsRefValidationError(
+                                path, inst, "", "oneOf: no branch matched"
+                            )
+                        )
                     elif matching > 1:
                         errs.append(
                             XGtsRefValidationError(
@@ -120,7 +125,9 @@ class XGtsRefValidator:
                         )
                 else:
                     matching_branches = [
-                        branch for branch in one_of if _is_structurally_valid(inst, branch)
+                        branch
+                        for branch in one_of
+                        if _is_structurally_valid(inst, branch)
                     ]
                     if len(matching_branches) == 1:
                         errs.extend(_validate_branch(inst, matching_branches[0], path))
@@ -128,18 +135,33 @@ class XGtsRefValidator:
             any_of = sch.get("anyOf")
             if isinstance(any_of, list):
                 if _is_x_gts_ref_only_combinator(any_of):
-                    branch_errors = [_validate_branch(inst, branch, path) for branch in any_of]
+                    branch_errors = [
+                        _validate_branch(inst, branch, path) for branch in any_of
+                    ]
                     if not any(not branch for branch in branch_errors):
-                        errs.append(XGtsRefValidationError(path, inst, "", "anyOf: no branch matched"))
+                        errs.append(
+                            XGtsRefValidationError(
+                                path, inst, "", "anyOf: no branch matched"
+                            )
+                        )
                 else:
                     matching_branches = [
-                        branch for branch in any_of if _is_structurally_valid(inst, branch)
+                        branch
+                        for branch in any_of
+                        if _is_structurally_valid(inst, branch)
                     ]
                     branch_errors = [
-                        _validate_branch(inst, branch, path) for branch in matching_branches
+                        _validate_branch(inst, branch, path)
+                        for branch in matching_branches
                     ]
-                    if matching_branches and not any(not branch for branch in branch_errors):
-                        errs.append(XGtsRefValidationError(path, inst, "", "anyOf: no branch matched"))
+                    if matching_branches and not any(
+                        not branch for branch in branch_errors
+                    ):
+                        errs.append(
+                            XGtsRefValidationError(
+                                path, inst, "", "anyOf: no branch matched"
+                            )
+                        )
 
             all_of = sch.get("allOf")
             if isinstance(all_of, list):
@@ -152,7 +174,9 @@ class XGtsRefValidator:
                     for prop_name, prop_schema in sch["properties"].items():
                         if prop_name in inst:
                             prop_path = f"{path}.{prop_name}" if path else prop_name
-                            visit_instance(inst[prop_name], prop_schema, prop_path, errs)
+                            visit_instance(
+                                inst[prop_name], prop_schema, prop_path, errs
+                            )
 
             if sch.get("type") == "array" and "items" in sch:
                 if isinstance(inst, list):

@@ -73,7 +73,8 @@ dev-fmt:
 
 # Check code formatting
 fmt:
-	ruff format --check gts/src
+	@$(PYTHON) -m ruff --version >/dev/null 2>&1 || { echo "Ruff is required. Install it with: $(PYTHON) -m pip install ruff"; exit 1; }
+	$(PYTHON) -m ruff format --check gts/src
 
 # Run linter (ruff)
 lint:

@@ -359,7 +359,9 @@ class GtsHttpServer:
     async def validate_instance(self, body: ValidateInstanceRequest) -> Dict[str, Any]:
         return self.ops.validate_instance(body.instance_id).to_dict()
 
-    async def validate_type_schema(self, body: ValidateTypeSchemaRequest) -> Dict[str, Any]:
+    async def validate_type_schema(
+        self, body: ValidateTypeSchemaRequest
+    ) -> Dict[str, Any]:
         return self.ops.validate_schema(body.type_id).to_dict()
 
     async def validate_entity(self, body: ValidateEntityRequest) -> Dict[str, Any]:

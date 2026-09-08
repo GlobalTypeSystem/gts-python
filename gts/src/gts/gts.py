@@ -211,7 +211,7 @@ class GtsID:
         self.uuid_tail: Optional[str] = None
 
         # Detect combined anonymous instance: last tilde-part is a UUID
-        remainder = raw[len(GTS_PREFIX):]
+        remainder = raw[len(GTS_PREFIX) :]
         tilde_parts = remainder.split("~")
         last_part = tilde_parts[-1] if tilde_parts else ""
         if UUID_REGEX.match(last_part) and len(tilde_parts) >= 2:
@@ -234,9 +234,7 @@ class GtsID:
             parts = []
             for i in range(seg_count):
                 if _parts[i] == "":
-                    raise GtsInvalidId(
-                        id, f"GTS segment #{i + 1} is empty"
-                    )
+                    raise GtsInvalidId(id, f"GTS segment #{i + 1} is empty")
                 parts.append(_parts[i] + "~")
         else:
             parts = []
@@ -261,14 +259,22 @@ class GtsID:
         # Add UUID tail as a special segment if present
         if self.uuid_tail:
             self.gts_id_segments.append(
-                GtsIdSegment._uuid_tail_segment(len(self.gts_id_segments) + 1, offset, self.uuid_tail)
+                GtsIdSegment._uuid_tail_segment(
+                    len(self.gts_id_segments) + 1, offset, self.uuid_tail
+                )
             )
 
         # Issue #37: Single-segment instance IDs are not allowed
         # An instance ID (not ending with ~) must be chained (have at least 2 segments)
         # UUID tail is exempt
-        non_uuid_segments = [s for s in self.gts_id_segments if not getattr(s, '_is_uuid_tail', False)]
-        if not self.id.endswith("~") and self.uuid_tail is None and len(non_uuid_segments) == 1:
+        non_uuid_segments = [
+            s for s in self.gts_id_segments if not getattr(s, "_is_uuid_tail", False)
+        ]
+        if (
+            not self.id.endswith("~")
+            and self.uuid_tail is None
+            and len(non_uuid_segments) == 1
+        ):
             # Check if it's a wildcard (wildcards are allowed as single segment)
             if not any(seg.is_wildcard for seg in self.gts_id_segments):
                 raise GtsInvalidId(
