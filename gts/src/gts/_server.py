@@ -185,7 +185,7 @@ class GtsHttpServer:
         self.host = host
         self.port = port
         self.base_url = f"http://{self.host}:{self.port}"
-        self.app = FastAPI(title="GTS Server", version="0.13.0")
+        self.app = FastAPI(title="GTS Server", version="0.13.1")
         self.app.add_middleware(
             _RequestLoggingMiddleware,
             verbose=self.ops.verbose,
