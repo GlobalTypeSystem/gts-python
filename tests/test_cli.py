@@ -25,6 +25,16 @@ from gts._cli import main
             "--gts-id",
             "gts.vendor.package.namespace.type.v1~vendor.package.namespace.item.v1",
         ],
+        [
+            "validate-type-schema",
+            "--gts-id",
+            "gts.vendor.package.namespace.type.v1~",
+        ],
+        [
+            "validate-entity",
+            "--gts-id",
+            "gts.vendor.package.namespace.type.v1~",
+        ],
         ["resolve-relationships", "--gts-id", "gts.vendor.package.namespace.type.v1~"],
         [
             "compatibility",

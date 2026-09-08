@@ -40,6 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--gts-id", required=True, help="GTS ID of the object")
 
     s = sub.add_parser(
+        "validate-type-schema",
+        help="Validate a type schema against its base type schema (OP#12 schema-vs-schema)",
+    )
+    s.add_argument("--gts-id", required=True, help="GTS ID of the type schema")
+
+    s = sub.add_parser(
+        "validate-entity",
+        help="Validate an entity (instance or schema) by GTS ID",
+    )
+    s.add_argument("--gts-id", required=True, help="GTS ID of the entity")
+
+    s = sub.add_parser(
         "resolve-relationships", help="Resolve relationships for an entity"
     )
     s.add_argument("--gts-id", required=True, help="GTS ID of the entity")
@@ -144,6 +156,10 @@ def main(argv: list[str] | None = None) -> None:
             out = ops.uuid(args.gts_id).to_dict()
         elif args.op == "validate-instance":
             out = ops.validate_instance(args.gts_id).to_dict()
+        elif args.op == "validate-type-schema":
+            out = ops.validate_schema(args.gts_id).to_dict()
+        elif args.op == "validate-entity":
+            out = ops.validate_entity(args.gts_id).to_dict()
         elif args.op == "resolve-relationships":
             out = ops.schema_graph(args.gts_id).to_dict()
         elif args.op == "compatibility":
