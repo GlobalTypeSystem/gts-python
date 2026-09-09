@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from gts._cli import main
 from gts.entities import DEFAULT_GTS_CONFIG
 from gts._json_validation import GtsJsonValidator
@@ -69,7 +71,9 @@ def test_validate_json_cli_outputs_json_only(tmp_path, capsys):
     input_path = tmp_path / "broken.json"
     input_path.write_text('{ "id": "gts.broken', encoding="utf-8")
 
-    main(["validate-all", "--path", str(input_path)])
+    with pytest.raises(SystemExit) as exc_info:
+        main(["validate-all", "--path", str(input_path)])
+    assert exc_info.value.code == 1
 
     captured = capsys.readouterr()
     output = json.loads(captured.out)

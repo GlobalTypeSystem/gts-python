@@ -297,11 +297,17 @@ class GtsOps:
         path: str | builtins.list[str] | None = None,
         config: str | None = None,
         verbose: int = 0,
+        exclude: builtins.list[str] | None = None,
     ) -> None:
         self.verbose = verbose
         self.cfg = self._load_config(config)
         self.path: str | list[str] | None = path
-        self._reader = GtsFileReader(self.path, cfg=self.cfg) if self.path else None
+        self.exclude = exclude
+        self._reader = (
+            GtsFileReader(self.path, cfg=self.cfg, exclude=self.exclude)
+            if self.path
+            else None
+        )
         self.store = GtsStore(self._reader) if self._reader else GtsStore(reader=None)  # type: ignore[arg-type]
 
     @staticmethod
@@ -345,7 +351,7 @@ class GtsOps:
 
     def reload_from_path(self, path: str | builtins.list[str]) -> None:
         self.path = path
-        self._reader = GtsFileReader(self.path, cfg=self.cfg)
+        self._reader = GtsFileReader(self.path, cfg=self.cfg, exclude=self.exclude)
         self.store = GtsStore(self._reader)
 
     def add_entity(

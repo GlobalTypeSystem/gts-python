@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .entities import GtsEntity, GtsFile
+from .files_reader import DEFAULT_EXCLUDE_LIST
 from .gts import GTS_PREFIX, GTS_URI_PREFIX, GtsID
 from .store import GtsStore
 
@@ -58,9 +59,10 @@ class GtsJsonValidationResult:
 
 
 class GtsJsonValidator:
-    def __init__(self, path: str, cfg: Any) -> None:
+    def __init__(self, path: str, cfg: Any, exclude: list[str] | None = None) -> None:
         self.path = Path(path).expanduser()
         self.cfg = cfg
+        self.exclude = list(exclude) if exclude else list(DEFAULT_EXCLUDE_LIST)
         self.result = GtsJsonValidationResult()
         self.entities: list[GtsEntity] = []
 
@@ -91,14 +93,38 @@ class GtsJsonValidator:
             return []
 
         files: list[Path] = []
-        seen: set[Path] = set()
-        for root, _dirs, names in os.walk(resolved, followlinks=True):
+        seen_files: set[Path] = set()
+        seen_dirs: set[tuple[int, int]] = set()
+        walk_errors: list[OSError] = []
+
+        def _on_walk_error(err: OSError) -> None:
+            walk_errors.append(err)
+
+        for root, dirs, names in os.walk(
+            resolved, followlinks=True, onerror=_on_walk_error
+        ):
+            # Prevent symlink cycles by tracking visited directory identities
+            root_stat = os.stat(root)
+            dir_id = (root_stat.st_dev, root_stat.st_ino)
+            if dir_id in seen_dirs:
+                dirs.clear()
+                continue
+            seen_dirs.add(dir_id)
+
+            # Prune excluded directories (defaults to DEFAULT_EXCLUDE_LIST,
+            # overridable via the CLI --exclude option)
+            dirs[:] = [d for d in dirs if d not in self.exclude]
+
             for name in names:
                 if Path(name).suffix.lower() == ".json":
                     rp = Path(root, name).resolve(strict=False)
-                    if rp not in seen:
-                        seen.add(rp)
+                    if rp not in seen_files:
+                        seen_files.add(rp)
                         files.append(rp)
+
+        for err in walk_errors:
+            self._issue(resolved, "discovery", f"Traversal error: {err}")
+
         return sorted(files)
 
     @staticmethod
@@ -185,21 +211,27 @@ class GtsJsonValidator:
                 instances += 1
         return schemas, instances
 
-    @staticmethod
-    def _is_gts_related(value: Any) -> bool:
-        if isinstance(value, str):
-            return (
-                GTS_PREFIX in value
-                or GTS_URI_PREFIX in value
-                or _X_GTS_REF_KEYWORD in value
-            )
-        if isinstance(value, dict):
-            return any(
-                GtsJsonValidator._is_gts_related(item) for item in value.values()
-            )
-        if isinstance(value, list):
-            return any(GtsJsonValidator._is_gts_related(item) for item in value)
+    def _is_gts_related(self, value: Any) -> bool:
+        if not isinstance(value, dict):
+            return False
+        # Check configured identifier fields for GTS IDs.
+        # Accept valid IDs and also detect likely-but-malformed ones
+        # (gts:// or gts. prefix) so they get diagnosed during registration
+        # rather than silently skipped.
+        for f in self.cfg.entity_id_fields:
+            v = value.get(f)
+            if isinstance(v, str) and self._looks_gts(v):
+                return True
+        for f in self.cfg.schema_id_fields:
+            v = value.get(f)
+            if isinstance(v, str) and self._looks_gts(v):
+                return True
         return False
+
+    @staticmethod
+    def _looks_gts(v: str) -> bool:
+        normalized = v.removeprefix(GTS_URI_PREFIX)
+        return normalized.startswith(GTS_PREFIX) or v.startswith(GTS_URI_PREFIX)
 
     @staticmethod
     def _registry_key(entity: GtsEntity) -> str | None:
@@ -249,24 +281,23 @@ class GtsJsonValidator:
         return 0
 
     def _validate_instances(self, store: GtsStore) -> None:
-        pending: list[tuple[int, str, str, int | None, str]] = []
+        pending: list[tuple[int, str, str, int | None, str, GtsEntity]] = []
         for entity in self.entities:
             if entity.is_schema:
                 continue
             key = self._registry_key(entity)
             if key is None:
                 continue
+            # Skip rejected duplicates: only validate the registered entity
+            if store.get(key) is not entity:
+                continue
             depth = self._entity_depth(entity)
             gts_id_str = entity.gts_id.id if entity.gts_id else ""
             file = entity.file.path if entity.file else entity.label
-            pending.append((depth, gts_id_str, file, entity.list_sequence, key))
+            pending.append((depth, gts_id_str, file, entity.list_sequence, key, entity))
         pending.sort(key=lambda t: (t[0], t[1], t[2], t[3] if t[3] is not None else -1))
 
-        for _depth, _gts_id, _file, _idx, registry_key in pending:
-            # Find the entity for error reporting
-            entity = store.get(registry_key)
-            if entity is None:
-                continue
+        for _depth, _gts_id, _file, _idx, registry_key, entity in pending:
             try:
                 store.validate_instance(registry_key)
             except Exception as error:  # noqa: BLE001 - report this document and continue
