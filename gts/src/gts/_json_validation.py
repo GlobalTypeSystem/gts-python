@@ -7,11 +7,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from jsonschema.validators import validator_for
-
 from .entities import GtsEntity, GtsFile
-from .gts import GtsID
+from .gts import GTS_PREFIX, GTS_URI_PREFIX, GtsID
 from .store import GtsStore
+
+_X_GTS_REF_KEYWORD = "x-gts-ref"
 
 
 @dataclass
@@ -67,8 +67,12 @@ class GtsJsonValidator:
     def validate(self) -> GtsJsonValidationResult:
         for file_path in self._json_files():
             self._read_file(file_path)
-        self._validate_json_schemas()
+        self._check_schema_field_type()
         store = self._register_gts_entities()
+        schemas_count, instances_count = self._count_schema_instance()
+        self.result.schemas = schemas_count
+        self.result.instances = instances_count
+        self.result.gts_entities = schemas_count + instances_count
         self._validate_schemas(store)
         self._validate_instances(store)
         return self.result
@@ -87,22 +91,35 @@ class GtsJsonValidator:
             return []
 
         files: list[Path] = []
-        for root, dirs, names in os.walk(resolved, followlinks=True):
-            dirs[:] = [
-                name for name in dirs if name not in {"node_modules", "dist", "build"}
-            ]
-            files.extend(
-                Path(root, name).resolve(strict=False)
-                for name in names
-                if Path(name).suffix.lower() == ".json"
-            )
-        return sorted(set(files))
+        seen: set[Path] = set()
+        for root, _dirs, names in os.walk(resolved, followlinks=True):
+            for name in names:
+                if Path(name).suffix.lower() == ".json":
+                    rp = Path(root, name).resolve(strict=False)
+                    if rp not in seen:
+                        seen.add(rp)
+                        files.append(rp)
+        return sorted(files)
+
+    @staticmethod
+    def _is_gts_marker(text: str) -> bool:
+        return (
+            GTS_PREFIX in text or GTS_URI_PREFIX in text or _X_GTS_REF_KEYWORD in text
+        )
 
     def _read_file(self, file_path: Path) -> None:
-        self.result.files += 1
         try:
-            with file_path.open(encoding="utf-8") as source:
-                content = json.load(source)
+            content_str = file_path.read_text(encoding="utf-8")
+        except Exception as error:  # noqa: BLE001 - report this document and continue
+            self._issue(file_path, "json", str(error))
+            return
+
+        if not self._is_gts_marker(content_str):
+            return
+        self.result.files += 1
+
+        try:
+            content = json.loads(content_str)
         except Exception as error:  # noqa: BLE001 - report this document and continue
             self._issue(file_path, "json", str(error))
             return
@@ -120,15 +137,14 @@ class GtsJsonValidator:
                 )
             )
 
-    def _validate_json_schemas(self) -> None:
+    def _check_schema_field_type(self) -> None:
         for entity in self.entities:
             content = entity.content
-            if not isinstance(content, dict) or "$schema" not in content:
+            if not isinstance(content, dict):
                 continue
-            try:
-                validator_for(content).check_schema(content)
-            except Exception as error:  # noqa: BLE001 - report this document and continue
-                self._issue(entity, "json-schema", str(error))
+            schema_val = content.get("$schema")
+            if schema_val is not None and not isinstance(schema_val, str):
+                self._issue(entity, "json-schema", "$schema must be a string")
 
     def _register_gts_entities(self) -> GtsStore:
         store = GtsStore(reader=None)  # type: ignore[arg-type]
@@ -138,9 +154,12 @@ class GtsJsonValidator:
                 continue
             key = self._registry_key(entity)
             if key is None:
-                self._issue(
-                    entity, "registry", "GTS-related document has no registrable GTS ID"
-                )
+                if entity.is_schema:
+                    self._issue(
+                        entity,
+                        "registry",
+                        "GTS schema has a malformed or non-GTS $id",
+                    )
                 continue
             if not entity.is_schema and entity.selected_entity_field is None:
                 raw_id = entity.raw_id
@@ -152,17 +171,28 @@ class GtsJsonValidator:
                 continue
             keys.add(key)
             store.register(entity)
-            self.result.gts_entities += 1
-            if entity.is_schema:
-                self.result.schemas += 1
-            else:
-                self.result.instances += 1
         return store
+
+    def _count_schema_instance(self) -> tuple[int, int]:
+        schemas = 0
+        instances = 0
+        for entity in self.entities:
+            if self._registry_key(entity) is None:
+                continue
+            if entity.is_schema:
+                schemas += 1
+            else:
+                instances += 1
+        return schemas, instances
 
     @staticmethod
     def _is_gts_related(value: Any) -> bool:
         if isinstance(value, str):
-            return "gts." in value
+            return (
+                GTS_PREFIX in value
+                or GTS_URI_PREFIX in value
+                or _X_GTS_REF_KEYWORD in value
+            )
         if isinstance(value, dict):
             return any(
                 GtsJsonValidator._is_gts_related(item) for item in value.values()
@@ -187,43 +217,58 @@ class GtsJsonValidator:
         return None
 
     def _validate_schemas(self, store: GtsStore) -> None:
-        schemas = sorted(
-            (
-                entity
-                for entity in self.entities
-                if entity.is_schema
-                and entity.gts_id
-                and store.get(entity.gts_id.id) is entity
-            ),
-            key=self._schema_depth,
-        )
-        for stage, depth in (("base-type", 1), ("derived-type", None)):
-            for entity in schemas:
-                if (depth == 1) != (self._schema_depth(entity) == 1):
-                    continue
-                gts_id = entity.gts_id
-                if not gts_id:
-                    continue
-                try:
-                    store.validate_schema(gts_id.id)
-                except Exception as error:  # noqa: BLE001 - report this document and continue
-                    self._issue(entity, stage, str(error))
+        pending: list[tuple[int, str, str, int | None, GtsEntity]] = []
+        for entity in self.entities:
+            if not entity.is_schema or not entity.gts_id:
+                continue
+            gid = entity.gts_id
+            if store.get(gid.id) is not entity:
+                continue
+            depth = len(gid.gts_id_segments)
+            file = entity.file.path if entity.file else entity.label
+            pending.append((depth, gid.id, file, entity.list_sequence, entity))
+        pending.sort(key=lambda t: (t[0], t[1], t[2], t[3] if t[3] is not None else -1))
+
+        for depth, _gts_id, _file, _idx, entity in pending:
+            stage = "base-type" if depth <= 1 else "derived-type"
+            try:
+                store.validate_schema(entity.gts_id.id)  # type: ignore[union-attr]
+            except Exception as error:  # noqa: BLE001 - report this document and continue
+                self._issue(entity, stage, str(error))
 
     @staticmethod
     def _schema_depth(entity: GtsEntity) -> int:
         return len(entity.gts_id.gts_id_segments) if entity.gts_id else 0
 
+    @staticmethod
+    def _entity_depth(entity: GtsEntity) -> int:
+        if entity.gts_id:
+            return len(entity.gts_id.gts_id_segments)
+        if entity.type_id and GtsID.is_valid(entity.type_id):
+            return len(GtsID(entity.type_id).gts_id_segments)
+        return 0
+
     def _validate_instances(self, store: GtsStore) -> None:
+        pending: list[tuple[int, str, str, int | None, str]] = []
         for entity in self.entities:
+            if entity.is_schema:
+                continue
             key = self._registry_key(entity)
-            if (
-                entity.is_schema
-                or key is None
-                or not self._is_gts_related(entity.content)
-            ):
+            if key is None:
+                continue
+            depth = self._entity_depth(entity)
+            gts_id_str = entity.gts_id.id if entity.gts_id else ""
+            file = entity.file.path if entity.file else entity.label
+            pending.append((depth, gts_id_str, file, entity.list_sequence, key))
+        pending.sort(key=lambda t: (t[0], t[1], t[2], t[3] if t[3] is not None else -1))
+
+        for _depth, _gts_id, _file, _idx, registry_key in pending:
+            # Find the entity for error reporting
+            entity = store.get(registry_key)
+            if entity is None:
                 continue
             try:
-                store.validate_instance(key)
+                store.validate_instance(registry_key)
             except Exception as error:  # noqa: BLE001 - report this document and continue
                 self._issue(entity, "instance", str(error))
 

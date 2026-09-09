@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scope", choices=["major", "full"], default="major")
 
     s = sub.add_parser(
-        "validate-json", help="Validate all JSON documents in a file or directory"
+        "validate-all", help="Validate all JSON documents in a file or directory"
     )
     s.add_argument("--path", dest="scan_path", help="JSON file or directory to scan")
 
@@ -152,16 +152,11 @@ def main(argv: list[str] | None = None) -> None:
             json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
             sys.stdout.write("\n")
             return
-        elif args.op == "validate-json":
+        elif args.op == "validate-all":
             scan_path = args.scan_path or args.path
             if not scan_path:
-                parser.error("validate-json requires --path")
+                parser.error("validate-all requires --path")
             result = GtsJsonValidator(scan_path, ops.cfg).validate()
-            for issue in result.issues:
-                suffix = f"#{issue.index}" if issue.index is not None else ""
-                sys.stderr.write(
-                    f"{issue.file}{suffix}: {issue.stage}: {issue.message}\n"
-                )
             out = result.to_dict()
         elif args.op == "validate-id":
             out = ops.validate_id(args.gts_id).to_dict()
