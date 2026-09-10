@@ -7,7 +7,7 @@ from gts.ops import GtsOps
 
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "$id": "gts.x.test._.foo.v1~",
+    "$id": "gts://gts.x.test._.foo.v1~",
     "type": "object",
     "properties": {"name": {"type": "string"}},
     "required": ["name"],
@@ -56,13 +56,16 @@ class TestAddEntity:
         assert result.ok is False
         assert "Unable to detect GTS ID" in result.error
 
-    def test_add_schema_plain_gts_prefix_rejected_when_validate(self, ops):
+    def test_add_schema_plain_gts_prefix_rejected(self, ops):
+        # A schema $id MUST use the gts:// URI form. A bare gts. prefix yields
+        # no gts_id at the core entity layer, so registration is rejected
+        # regardless of the validate flag.
         schema = dict(SCHEMA)
         schema["$id"] = "gts.x.test._.foo.v1~"
-        result = ops.add_entity(schema, validate=True)
-        # $id doesn't start with gts:// -> rejected only if raw $id startswith "gts."
-        assert result.ok is False
-        assert "gts:// URI format" in result.error
+        for validate in (False, True):
+            result = ops.add_entity(schema, validate=validate)
+            assert result.ok is False
+            assert "Unable to detect GTS ID in schema" in result.error
 
     def test_add_instance_without_id_field_rejected(self, ops):
         result = ops.add_entity({"name": "hi"})
@@ -88,7 +91,7 @@ class TestAddEntity:
     def test_add_schema_validate_basic_failure(self, ops):
         bad_schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "$id": "gts.x.test._.foo.v1~",
+            "$id": "gts://gts.x.test._.foo.v1~",
             "type": "object",
             "x-gts-ref": "notgts.*",
         }

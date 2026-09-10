@@ -370,26 +370,16 @@ class GtsOps:
                 is_type_schema=False,
             )
 
-        # Schemas MUST have a valid GTS ID
+        # Schemas MUST have a valid GTS ID. The core entity layer already
+        # rejects a plain gts. $id (without gts://) by leaving gts_id as None,
+        # so this single guard covers both the malformed and the wrong-prefix
+        # cases uniformly for every client.
         if entity.is_schema and not entity.gts_id:
             return GtsAddEntityResult(
-                ok=False, error="Unable to detect GTS ID in schema"
+                ok=False,
+                error="Unable to detect GTS ID in schema",
+                is_type_schema=entity.is_schema,
             )
-
-        # Validate $id prefix for schemas: must use gts:// URI, not plain gts.
-        if entity.is_schema and validate:
-            raw_id = content.get("$id", "")
-            # Reject plain gts. prefix (without gts://)
-            if (
-                isinstance(raw_id, str)
-                and raw_id.startswith("gts.")
-                and not raw_id.startswith("gts://")
-            ):
-                return GtsAddEntityResult(
-                    ok=False,
-                    error="Schema $id must use gts:// URI format, not plain gts. prefix",
-                    is_type_schema=True,
-                )
 
         store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
         previous = self.store.get(store_key)

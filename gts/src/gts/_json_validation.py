@@ -181,6 +181,8 @@ class GtsJsonValidator:
             key = self._registry_key(entity)
             if key is None:
                 if entity.is_schema:
+                    # A schema with a plain gts. $id (not gts://) yields no
+                    # gts_id at the core entity layer, so it lands here.
                     self._issue(
                         entity,
                         "registry",

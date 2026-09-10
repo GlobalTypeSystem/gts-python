@@ -12,7 +12,7 @@ from gts._server import GtsHttpServer, ValidateEntityRequest, _RequestLoggingMid
 
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "$id": "gts.x.test._.foo.v1~",
+    "$id": "gts://gts.x.test._.foo.v1~",
     "type": "object",
     "properties": {"name": {"type": "string"}},
 }
