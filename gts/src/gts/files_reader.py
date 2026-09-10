@@ -55,6 +55,7 @@ class GtsFileReader(GtsReader):
         """Collect all JSON and YAML files from the specified paths, following symlinks."""
         valid_extensions = {".json", ".jsonc", ".gts", ".yaml", ".yml"}
         seen: set[str] = set()
+        seen_dirs: set[tuple[int, int]] = set()
         collected: list[Path] = []
 
         for path in self.paths:
@@ -71,9 +72,15 @@ class GtsFileReader(GtsReader):
             elif resolved_path.is_dir():
                 # Recursively scan for all valid file types, following symlinks
                 for root, dirs, files in os.walk(resolved_path, followlinks=True):
-                    for excluded in self.exclude:
-                        if excluded in dirs:
-                            dirs.remove(excluded)
+                    # Prevent symlink cycles by tracking visited directory identities
+                    root_stat = os.stat(root)
+                    dir_id = (root_stat.st_dev, root_stat.st_ino)
+                    if dir_id in seen_dirs:
+                        dirs.clear()
+                        continue
+                    seen_dirs.add(dir_id)
+
+                    dirs[:] = [d for d in dirs if d not in self.exclude]
                     for fname in files:
                         ext = os.path.splitext(fname)[1].lower()
                         if ext in valid_extensions:
