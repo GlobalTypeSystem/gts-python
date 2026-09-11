@@ -153,6 +153,30 @@ class GtsEntityValidationResult:
 
 
 @dataclass
+class GtsJsonValidationResult:
+    """Result of validating an unregistered JSON entity."""
+
+    ok: bool
+    id: str = ""
+    type_id: str | None = None
+    is_type_schema: bool = False
+    error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "ok": self.ok,
+            "is_type_schema": self.is_type_schema,
+        }
+        if self.id:
+            result["id"] = self.id
+        if self.type_id:
+            result["type_id"] = self.type_id
+        if self.error:
+            result["error"] = self.error
+        return result
+
+
+@dataclass
 class GtsSchemaGraphResult:
     """Result of building a schema graph for an entity."""
 
@@ -366,7 +390,7 @@ class GtsOps:
         ):
             return GtsAddEntityResult(
                 ok=False,
-                error="Instance must have an id field",
+                error="Unable to detect GTS ID in instance entity: Instance must have an id field",
                 is_type_schema=False,
             )
 
@@ -523,6 +547,83 @@ class GtsOps:
     def uuid(self, gts_id: str) -> GtsUuidResult:
         g = GtsID(gts_id)
         return GtsUuidResult(id=g.id, uuid=str(g.to_uuid()))
+
+    def validate_json(
+        self, content: dict[str, Any], explicit_type_id: str | None = None
+    ) -> GtsJsonValidationResult:
+        """Validate JSON without retaining it in the registry."""
+        entity = GtsEntity(content=content, cfg=self.cfg)
+        if explicit_type_id is not None:
+            try:
+                explicit_type = GtsID(explicit_type_id)
+            except ValueError:
+                if explicit_type_id.startswith(("gts.", "gts://")):
+                    return GtsJsonValidationResult(
+                        ok=False,
+                        error=f"Explicit type '{explicit_type_id}' must be GTS Type schema",
+                    )
+                return GtsJsonValidationResult(
+                    ok=False, error=f"Invalid GTS Type Schema ID: {explicit_type_id}"
+                )
+            if not explicit_type.is_type:
+                return GtsJsonValidationResult(
+                    ok=False,
+                    error=f"Explicit type '{explicit_type_id}' must be GTS Type schema",
+                )
+            explicit_type_id = explicit_type.id
+            if entity.is_schema:
+                return GtsJsonValidationResult(
+                    ok=False,
+                    is_type_schema=True,
+                    error="Explicit type validation only accepts instance JSON",
+                )
+            if entity.type_id and entity.type_id != explicit_type_id:
+                return GtsJsonValidationResult(
+                    ok=False,
+                    type_id=explicit_type_id,
+                    error=(
+                        f"Declared type '{entity.type_id}' does not match path type "
+                        f"'{explicit_type_id}'"
+                    ),
+                )
+            entity.type_id = explicit_type_id
+        elif entity.is_schema and not entity.gts_id:
+            return GtsJsonValidationResult(
+                ok=False,
+                is_type_schema=True,
+                error="Unable to detect GTS ID in schema",
+            )
+        elif not entity.is_schema and not entity.type_id:
+            return GtsJsonValidationResult(
+                ok=False,
+                error="Unable to determine instance type",
+            )
+
+        try:
+            if entity.is_schema:
+                self.store.validate_schema_content(entity.gts_id.id, content)  # type: ignore[union-attr]
+            else:
+                self.store.validate_instance_content(content, entity.type_id)
+        except Exception as error:  # noqa: BLE001 - converted to a result object at API boundary
+            error_message = str(error)
+            if entity.is_schema and "not found for chain validation" in error_message:
+                error_message = f"Parent GTS Type Schema not found: {error_message}"
+            elif explicit_type_id is not None and "not found in store" in error_message:
+                error_message = f"GTS Type Schema not found: {explicit_type_id}"
+            return GtsJsonValidationResult(
+                ok=False,
+                id=entity.gts_id.id if entity.gts_id else (entity.raw_id or ""),
+                type_id=entity.type_id,
+                is_type_schema=entity.is_schema,
+                error=error_message,
+            )
+
+        return GtsJsonValidationResult(
+            ok=True,
+            id=entity.gts_id.id if entity.gts_id else (entity.raw_id or ""),
+            type_id=entity.type_id,
+            is_type_schema=entity.is_schema,
+        )
 
     def validate_instance(self, gts_id: str) -> GtsValidationResult:
         try:
