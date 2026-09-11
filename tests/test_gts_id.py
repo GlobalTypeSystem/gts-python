@@ -1,16 +1,17 @@
 """Tests for GTS ID parsing and validation."""
 
-import pytest
 import uuid
 
+import pytest
+
 from gts.gts import (
+    GTS_PREFIX,
     GtsID,
     GtsIdSegment,
-    GtsWildcard,
     GtsInvalidId,
     GtsInvalidSegment,
     GtsInvalidWildcard,
-    GTS_PREFIX,
+    GtsWildcard,
 )
 
 
@@ -140,6 +141,48 @@ class TestGtsID:
         type_id = gts_id.get_type_id()
         assert type_id == "gts.vendor.package.namespace.type.v1~"
 
+    @pytest.mark.parametrize(
+        ("value", "is_type", "type_id", "parent_type_id"),
+        [
+            (
+                "gts.vendor.package.namespace.type.v1~",
+                True,
+                "gts.vendor.package.namespace.type.v1~",
+                None,
+            ),
+            (
+                "gts.vendor.package.namespace.type.v1~vendor.package.namespace.child.v1~",
+                True,
+                "gts.vendor.package.namespace.type.v1~vendor.package.namespace.child.v1~",
+                "gts.vendor.package.namespace.type.v1~",
+            ),
+            (
+                "gts.vendor.package.namespace.type.v1~vendor.package.namespace.instance.v1",
+                False,
+                "gts.vendor.package.namespace.type.v1~",
+                None,
+            ),
+            (
+                "gts.vendor.package.namespace.type.v1~7a1d2f34-5678-49ab-9012-abcdef123456",
+                False,
+                "gts.vendor.package.namespace.type.v1~",
+                None,
+            ),
+        ],
+    )
+    def test_resolves_type_identity(self, value, is_type, type_id, parent_type_id):
+        gts_id = GtsID(value)
+        assert gts_id.is_type is is_type
+        assert gts_id.is_instance is not is_type
+        assert gts_id.type_id == type_id
+        assert gts_id.parent_type_id == parent_type_id
+
+    def test_parse_type_rejects_instance(self):
+        with pytest.raises(GtsInvalidId, match="must end with '~'"):
+            GtsID.parse_type(
+                "gts.vendor.package.namespace.type.v1~vendor.package.namespace.instance.v1"
+            )
+
     def test_to_uuid(self):
         """Test UUID generation is deterministic."""
         gts_id1 = GtsID("gts.vendor.package.namespace.type.v1~")
@@ -244,9 +287,7 @@ class TestGtsIDEdgeCases:
 
     def test_combined_anonymous_id_uses_embedded_uuid(self):
         embedded_uuid = "7a1d2f34-5678-49ab-9012-abcdef123456"
-        gts_id = GtsID(
-            "gts.vendor.package.namespace.type.v1~" + embedded_uuid
-        )
+        gts_id = GtsID("gts.vendor.package.namespace.type.v1~" + embedded_uuid)
 
         assert gts_id.uuid_tail == embedded_uuid
         assert gts_id.to_uuid() == uuid.UUID(embedded_uuid)

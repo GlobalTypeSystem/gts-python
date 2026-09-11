@@ -20,6 +20,13 @@ from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 logger = logging.getLogger(__name__)
 
 
+def _require_schema_id(value: str) -> GtsID:
+    try:
+        return GtsID.parse_type(value)
+    except ValueError as error:
+        raise ValueError(f"ID '{value}' is not a schema (must end with '~')") from error
+
+
 class StoreGtsObjectNotFound(Exception):
     """Exception raised when a GTS entity is not found in the store."""
 
@@ -159,12 +166,9 @@ class GtsStore:
         Register a schema (legacy method for backward compatibility).
         Creates a JsonEntity from the schema dict.
         """
-        if not type_id.endswith("~"):
-            raise ValueError("Schema type_id must end with '~'")
-        # parse sanity
-        gts_id = GtsID(type_id)
+        gts_id = GtsID.parse_type(type_id)
         entity = GtsEntity(content=schema, gts_id=gts_id, is_schema=True)
-        self._by_id[type_id] = entity
+        self._by_id[gts_id.id] = entity
 
     def get(self, entity_id: str) -> GtsEntity | None:
         """
@@ -292,17 +296,15 @@ class GtsStore:
         Args:
             gts_id: The GTS ID of the schema to validate
         """
-        if not gts_id.endswith("~"):
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
-
-        schema_entity = self.get(gts_id)
+        schema_id = _require_schema_id(gts_id)
+        schema_entity = self.get(schema_id.id)
         if not schema_entity:
-            raise StoreGtsSchemaNotFound(gts_id)
+            raise StoreGtsSchemaNotFound(schema_id.id)
 
         if not schema_entity.is_schema:
-            raise ValueError(f"Entity '{gts_id}' is not a schema")
+            raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
-        self._validate_schema_x_gts_refs_content(gts_id, schema_entity.content)
+        self._validate_schema_x_gts_refs_content(schema_id.id, schema_entity.content)
 
     def _validate_schema_x_gts_refs_content(
         self, gts_id: str, schema_content: dict[str, Any]
@@ -613,15 +615,13 @@ class GtsStore:
         3. GTS keyword validation (x-gts-final, x-gts-abstract, placement)
         4. JSON Schema meta-schema validation
         """
-        if not gts_id.endswith("~"):
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
-
-        schema_entity = self.get(gts_id)
+        schema_id = _require_schema_id(gts_id)
+        schema_entity = self.get(schema_id.id)
         if not schema_entity:
-            raise StoreGtsSchemaNotFound(gts_id)
+            raise StoreGtsSchemaNotFound(schema_id.id)
 
         if not schema_entity.is_schema:
-            raise ValueError(f"Entity '{gts_id}' is not a schema")
+            raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
         schema_content = schema_entity.content
         if not isinstance(schema_content, dict):
@@ -652,9 +652,7 @@ class GtsStore:
         self, gts_id: str, schema_content: dict[str, Any]
     ) -> None:
         """Validate a schema using the registry only for its dependencies."""
-        schema_id = GtsID(gts_id)
-        if not schema_id.is_type:
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
+        schema_id = _require_schema_id(gts_id)
 
         meta_schema_url = schema_content.get("$schema")
         if (
@@ -697,14 +695,7 @@ class GtsStore:
 
     def validate_schema(self, gts_id: str) -> None:
         """Validate a registered schema and all of its dependencies."""
-        try:
-            schema_id = GtsID(gts_id)
-        except ValueError as error:
-            raise ValueError(
-                f"ID '{gts_id}' is not a schema (must end with '~')"
-            ) from error
-        if not schema_id.is_type:
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
+        schema_id = _require_schema_id(gts_id)
 
         schema_entity = self.get(schema_id.id)
         if not schema_entity:
@@ -719,9 +710,7 @@ class GtsStore:
 
     def validate_instance_content(self, content: dict[str, Any], type_id: str) -> None:
         """Validate unregistered instance content against a registered type schema."""
-        schema_type = GtsID(type_id)
-        if not schema_type.is_type:
-            raise ValueError(f"ID '{type_id}' is not a schema (must end with '~')")
+        schema_type = _require_schema_id(type_id)
         try:
             schema = self.get_schema_content(schema_type.id)
         except KeyError as error:
