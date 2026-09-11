@@ -11,7 +11,7 @@ SHELL := /bin/bash
 PYTHON_BOOTSTRAP ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
 PY_ENV_DIR ?= .venv
 ifeq ($(OS),Windows_NT)
-PY_ENV_PYTHON := $(PY_ENV_DIR)/Scripts/python
+PY_ENV_PYTHON := $(PY_ENV_DIR)/Scripts/python.exe
 else
 PY_ENV_PYTHON := $(PY_ENV_DIR)/bin/python
 endif
