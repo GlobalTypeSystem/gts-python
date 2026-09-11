@@ -20,9 +20,9 @@ import copy
 from typing import Any
 
 from jsonschema import Draft7Validator, FormatChecker
-from jsonschema.validators import validator_for
 
 from . import derivation
+from .schema_validation import validator_for
 from .x_gts_ref import XGtsRefValidator
 
 X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
