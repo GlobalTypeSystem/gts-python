@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from jsonschema import Draft7Validator, FormatChecker
 from jsonschema.validators import validator_for
 
 from . import derivation
@@ -28,6 +29,8 @@ X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
 X_GTS_TRAITS = "x-gts-traits"
 MAX_RECURSION_DEPTH = 64
 _MISSING = object()
+_FORMAT_CHECKER = FormatChecker()
+_FORMAT_CHECKER.checkers.update(Draft7Validator.FORMAT_CHECKER.checkers)
 
 
 class EffectiveTraits:
@@ -51,7 +54,9 @@ class EffectiveTraits:
     def _has_explicit_values(self) -> bool:
         return isinstance(self.merged_traits, dict) and len(self.merged_traits) > 0
 
-    def validate(self, check_unresolved: bool) -> list[str]:
+    def validate(
+        self, check_unresolved: bool, reference_store: Any | None = None
+    ) -> list[str]:
         """Return a list of error strings (empty means valid)."""
         errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
         if errors:
@@ -76,7 +81,9 @@ class EffectiveTraits:
                 ]
             return []
 
-        return _validate_trait_values(self.schema, self.values, check_unresolved)
+        return _validate_trait_values(
+            self.schema, self.values, check_unresolved, reference_store
+        )
 
 
 # --- collection ------------------------------------------------------------
@@ -358,7 +365,7 @@ def _validate_traits_against_schema(
 
     try:
         cls = validator_for(validation_schema)
-        validator = cls(validation_schema)
+        validator = cls(validation_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
     except Exception as e:  # noqa: BLE001 - surfaced as validation error message
@@ -391,12 +398,15 @@ def _validate_traits_against_schema(
 
 
 def _validate_trait_values(
-    effective_traits_schema: Any, effective_traits: Any, check_unresolved: bool
+    effective_traits_schema: Any,
+    effective_traits: Any,
+    check_unresolved: bool,
+    reference_store: Any | None,
 ) -> list[str]:
     errors = _validate_traits_against_schema(
         effective_traits_schema, effective_traits, check_unresolved
     )
-    xref = XGtsRefValidator()
+    xref = XGtsRefValidator(store=reference_store, require_registered_target=True)
     for err in xref.validate_instance(effective_traits, effective_traits_schema, ""):
         errors.append(f"trait x-gts-ref: {err.reason}")
     return errors

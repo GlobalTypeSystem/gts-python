@@ -95,6 +95,16 @@ def _validate_derivation(
             f"closed constraint in base '{base_id}'"
         )
 
+    base_required = set(base.get("required", [])) if isinstance(base, dict) else set()
+    derived_required = (
+        set(derived.get("required", [])) if isinstance(derived, dict) else set()
+    )
+    for name in sorted(base_required - derived_required):
+        errors.append(
+            f"property '{name}': derived schema '{derived_id}' does not require "
+            f"a property required by base '{base_id}'"
+        )
+
     # Admission fails closed: an unprovable inclusion is rejected.
     if check_accepted_set_inclusion(derived, base) is not True:
         errors.append(
