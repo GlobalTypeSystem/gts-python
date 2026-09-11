@@ -137,7 +137,15 @@ def _lower_root_unevaluated_properties(schema: Any) -> Any | None:
         return schema
     if any(
         key in schema
-        for key in ("$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "dependentSchemas")
+        for key in (
+            "$ref",
+            "$dynamicRef",
+            "allOf",
+            "anyOf",
+            "oneOf",
+            "not",
+            "dependentSchemas",
+        )
     ):
         return None
     unevaluated = schema["unevaluatedProperties"]
