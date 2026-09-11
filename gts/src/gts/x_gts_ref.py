@@ -102,10 +102,36 @@ class XGtsRefValidator:
         """
         errors: list[XGtsRefValidationError] = []
 
-        def visit_instance(inst, sch, path, errs):
+        def resolve_local_ref(ref: str) -> Any | None:
+            if not ref.startswith("#/"):
+                return None
+            current: Any = schema
+            for part in ref[2:].split("/"):
+                part = part.replace("~1", "/").replace("~0", "~")
+                if isinstance(current, dict):
+                    if part not in current:
+                        return None
+                    current = current[part]
+                elif isinstance(current, list):
+                    try:
+                        current = current[int(part)]
+                    except (ValueError, IndexError):
+                        return None
+                else:
+                    return None
+            return current
+
+        def visit_instance(inst, sch, path, errs, refs=None):
             """Visit instance nodes and validate x-gts-ref constraints."""
             if not isinstance(sch, dict):
                 return
+
+            refs = refs or set()
+            ref = sch.get("$ref")
+            if isinstance(ref, str) and ref not in refs:
+                target = resolve_local_ref(ref)
+                if target is not None:
+                    visit_instance(inst, target, path, errs, refs | {ref})
 
             if "x-gts-ref" in sch and isinstance(inst, str):
                 error = self._validate_ref_value(inst, sch["x-gts-ref"], path, schema)
@@ -180,17 +206,14 @@ class XGtsRefValidator:
                     if _is_structurally_valid(inst, branch):
                         errs.extend(_validate_branch(inst, branch, path))
 
-            if (
-                sch.get("type") == "object"
-                and "properties" in sch
-                and isinstance(inst, dict)
-            ):
-                for prop_name, prop_schema in sch["properties"].items():
+            properties = sch.get("properties")
+            if isinstance(properties, dict) and isinstance(inst, dict):
+                for prop_name, prop_schema in properties.items():
                     if prop_name in inst:
                         prop_path = f"{path}.{prop_name}" if path else prop_name
                         visit_instance(inst[prop_name], prop_schema, prop_path, errs)
 
-            if sch.get("type") == "array" and "items" in sch and isinstance(inst, list):
+            if "items" in sch and isinstance(inst, list):
                 for idx, item in enumerate(inst):
                     item_path = f"{path}[{idx}]"
                     visit_instance(item, sch["items"], item_path, errs)
