@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import exceptions as js_exceptions
-from jsonschema import validate as js_validate
 
 from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
+from .schema_validation import validator_for
 
 logger = logging.getLogger(__name__)
 
@@ -396,10 +396,12 @@ class GtsEntityCastResult:
         # Create a modified schema that removes const constraints for GTS IDs
         modified_schema = GtsEntityCastResult._remove_gts_const_constraints(schema)
 
+        validator_class = validator_for(modified_schema)
         if resolver is not None:
-            js_validate(instance=instance, schema=modified_schema, resolver=resolver)
+            validator = validator_class(modified_schema, resolver=resolver)
         else:
-            js_validate(instance=instance, schema=modified_schema)
+            validator = validator_class(modified_schema)
+        validator.validate(instance)
 
     @staticmethod
     def _remove_gts_const_constraints(schema: Any) -> Any:
@@ -434,34 +436,73 @@ class GtsEntityCastResult:
         result: dict[str, Any] = {}
         for sub_schema in schema.get("allOf", []):
             if isinstance(sub_schema, dict):
-                result.update(GtsEntityCastResult._flatten_property_schema(sub_schema))
-        result.update({key: value for key, value in schema.items() if key != "allOf"})
+                for key, value in GtsEntityCastResult._flatten_property_schema(
+                    sub_schema
+                ).items():
+                    if key in result and result[key] != value:
+                        result = {"allOf": [result, {key: copy.deepcopy(value)}]}
+                    else:
+                        result[key] = copy.deepcopy(value)
+        for key, value in schema.items():
+            if key != "allOf":
+                if key in result and result[key] != value:
+                    result = {"allOf": [result, {key: copy.deepcopy(value)}]}
+                else:
+                    result[key] = copy.deepcopy(value)
         return result
 
     @staticmethod
+    def _merge_property_schemas(existing: Any, incoming: Any) -> Any:
+        if existing == incoming:
+            return copy.deepcopy(existing)
+        return {"allOf": [copy.deepcopy(existing), copy.deepcopy(incoming)]}
+
+    @staticmethod
     def _flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
-        """Flatten a schema by merging allOf schemas."""
-        result = {"properties": {}, "required": []}
+        """Flatten object-specific allOf members while retaining schema keywords."""
+        result = {
+            key: copy.deepcopy(value)
+            for key, value in schema.items()
+            if key not in {"allOf", "properties", "required"}
+        }
+        result["properties"] = {}
+        result["required"] = []
 
-        # Merge allOf schemas
-        if "allOf" in schema:
-            for sub_schema in schema["allOf"]:
-                flattened = GtsEntityCastResult._flatten_schema(sub_schema)
-                result["properties"].update(flattened.get("properties", {}))
-                result["required"].extend(flattened.get("required", []))
-                # Preserve additionalProperties from sub-schemas (last one wins)
-                if "additionalProperties" in flattened:
-                    result["additionalProperties"] = flattened["additionalProperties"]
+        for sub_schema in schema.get("allOf", []):
+            if not isinstance(sub_schema, dict):
+                continue
+            flattened = GtsEntityCastResult._flatten_schema(sub_schema)
+            for key, value in flattened.items():
+                if key == "properties":
+                    for name, prop_schema in value.items():
+                        if name in result["properties"]:
+                            result["properties"][name] = (
+                                GtsEntityCastResult._merge_property_schemas(
+                                    result["properties"][name], prop_schema
+                                )
+                            )
+                        else:
+                            result["properties"][name] = copy.deepcopy(prop_schema)
+                elif key == "required":
+                    result["required"].extend(value)
+                elif key not in result:
+                    result[key] = copy.deepcopy(value)
 
-        # Add direct properties and required
-        if "properties" in schema:
-            result["properties"].update(schema["properties"])
-        if "required" in schema:
-            result["required"].extend(schema["required"])
-        # Preserve additionalProperties from top level (overrides sub-schemas)
-        if "additionalProperties" in schema:
-            result["additionalProperties"] = schema["additionalProperties"]
-
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for name, prop_schema in properties.items():
+                if name in result["properties"]:
+                    result["properties"][name] = (
+                        GtsEntityCastResult._merge_property_schemas(
+                            result["properties"][name], prop_schema
+                        )
+                    )
+                else:
+                    result["properties"][name] = copy.deepcopy(prop_schema)
+        required = schema.get("required")
+        if isinstance(required, list):
+            result["required"].extend(required)
+        result["required"] = list(dict.fromkeys(result["required"]))
         return result
 
     @staticmethod
@@ -649,29 +690,31 @@ class GtsEntityCastResult:
                 )
 
             # Check enum constraints
-            old_enum = old_prop_schema.get("enum")
-            new_enum = new_prop_schema.get("enum")
-            if old_enum and new_enum:
-                old_enum_set = set(old_enum)
-                new_enum_set = set(new_enum)
+            has_old_enum = "enum" in old_prop_schema
+            has_new_enum = "enum" in new_prop_schema
+            old_enum = old_prop_schema.get("enum", [])
+            new_enum = new_prop_schema.get("enum", [])
+            if has_old_enum and has_new_enum:
                 if check_backward:
-                    # Backward: cannot add enum values
-                    added_enum_values = new_enum_set - old_enum_set
+                    added_enum_values = [
+                        value for value in new_enum if value not in old_enum
+                    ]
                     if added_enum_values:
                         errors.append(
                             f"Property '{prop}' added enum values: {added_enum_values}"
                         )
                 else:
-                    # Forward: cannot remove enum values
-                    removed_enum_values = old_enum_set - new_enum_set
+                    removed_enum_values = [
+                        value for value in old_enum if value not in new_enum
+                    ]
                     if removed_enum_values:
                         errors.append(
                             f"Property '{prop}' removed enum values: {removed_enum_values}"
                         )
-            elif old_enum:
+            elif has_old_enum:
                 if not check_backward:
                     errors.append(f"Property '{prop}' removed enum constraint")
-            elif new_enum and check_backward:
+            elif has_new_enum and check_backward:
                 errors.append(f"Property '{prop}' added enum constraint")
 
             # Check constraint compatibility

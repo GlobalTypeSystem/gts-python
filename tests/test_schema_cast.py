@@ -69,7 +69,9 @@ class TestInferDirection:
         )
 
     def test_unknown_on_invalid_id(self):
-        assert GtsEntityCastResult._infer_direction("not-an-id", "also-not") == "unknown"
+        assert (
+            GtsEntityCastResult._infer_direction("not-an-id", "also-not") == "unknown"
+        )
 
     def test_combined_anonymous_id_uses_versioned_segment(self):
         # Regression: the appended UUID-tail segment has ver_minor=None; the
@@ -357,8 +359,16 @@ class TestCheckSchemaCompatibility:
         assert any("removed enum constraint" in e for e in errors)
 
     def test_nested_object_errors_prefixed(self):
-        old = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "string"}}}}}
-        new = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "integer"}}}}}
+        old = {
+            "properties": {
+                "a": {"type": "object", "properties": {"b": {"type": "string"}}}
+            }
+        }
+        new = {
+            "properties": {
+                "a": {"type": "object", "properties": {"b": {"type": "integer"}}}
+            }
+        }
         ok, errors = GtsEntityCastResult._check_backward_compatibility(old, new)
         assert not ok
         assert any("Property 'a':" in e for e in errors)
@@ -366,7 +376,9 @@ class TestCheckSchemaCompatibility:
     def test_fully_compatible_returns_true(self):
         old = {"properties": {"a": {"type": "string"}}}
         new = {"properties": {"a": {"type": "string"}}, "properties2": {}}
-        ok, errors = GtsEntityCastResult._check_backward_compatibility(old, {"properties": {"a": {"type": "string"}}})
+        ok, errors = GtsEntityCastResult._check_backward_compatibility(
+            old, {"properties": {"a": {"type": "string"}}}
+        )
         assert ok
         assert errors == []
 
@@ -491,6 +503,28 @@ class TestCastClassmethod:
         )
         assert result.is_fully_compatible is True
         assert result.casted_entity == {"a": "x"}
+
+    def test_cast_across_distinct_dialects_has_unknown_compatibility(self):
+        result = GtsEntityCastResult.cast(
+            "gts.x.test._.foo.v1.0~x.test._.bar.v1.0",
+            "gts.x.test._.foo.v1.1~",
+            {"status": "active"},
+            {
+                "$schema": "https://json-schema.org/draft-07/schema",
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+            },
+            {
+                "$schema": "http://json-schema.org/draft/2020-12/schema#",
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+            },
+        )
+
+        assert result.casted_entity == {"status": "active"}
+        assert result.to_dict()["backward_compatibility"] == "unknown"
+        assert result.to_dict()["forward_compatibility"] == "unknown"
+        assert result.to_dict()["full_compatibility"] == "unknown"
 
     def test_cast_with_non_dict_instance_content_defaults_to_empty(self):
         result = GtsEntityCastResult.cast(
