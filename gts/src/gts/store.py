@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from typing import Any
 
 from jsonschema import FormatChecker, RefResolver
-from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
@@ -15,6 +14,7 @@ from . import compatibility, derivation, traits
 from .entities import GtsEntity
 from .gts import GtsID, GtsWildcard
 from .schema_cast import GtsEntityCastResult
+from .schema_validation import validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
@@ -674,7 +674,6 @@ class GtsStore:
 
         try:
             from jsonschema import Draft7Validator
-            from jsonschema.validators import validator_for
 
             if meta_schema_url:
                 validator_class = validator_for({"$schema": meta_schema_url})
