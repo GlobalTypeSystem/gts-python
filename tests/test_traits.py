@@ -157,6 +157,26 @@ class TestBuildEffectiveTraits:
         effective = build_effective_traits([schema], {"a": "hi"}, None)
         assert effective.validate(check_unresolved=True) == []
 
+    def test_standard_trait_formats_are_enforced(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "email": {"type": "string", "format": "email"},
+                "time": {"type": "string", "format": "time"},
+            },
+        }
+
+        assert (
+            build_effective_traits(
+                [schema], {"email": "user@example.com", "time": "10:30:00Z"}, None
+            ).validate(check_unresolved=True)
+            == []
+        )
+        errors = build_effective_traits(
+            [schema], {"email": "not-an-email", "time": "10:30:00Z"}, None
+        ).validate(check_unresolved=True)
+        assert any("is not a 'email'" in error for error in errors)
+
     def test_invalid_trait_type_fails(self):
         schema = {
             "type": "object",

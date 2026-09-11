@@ -245,7 +245,7 @@ class TestGtsStoreValidation:
         schema = GtsEntity(
             content={
                 "$schema": "http://json-schema.org/draft-07/schema#",
-                "$id": "gts.vendor.package.namespace.type.v1~",
+                "$id": "gts://gts.vendor.package.namespace.type.v1~",
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
@@ -316,7 +316,7 @@ class TestGtsStoreBuildGraph:
         """Test building a simple graph."""
         schema = GtsEntity(
             content={
-                "$id": "gts.vendor.package.namespace.type.v1~",
+                "$id": "gts://gts.vendor.package.namespace.type.v1~",
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "type": "object",
             },

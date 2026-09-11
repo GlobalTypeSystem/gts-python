@@ -160,7 +160,7 @@ class GtsEntityCastResult:
                 cls._validate_with_gts_id_tolerance(casted, to_schema_content, resolver)
             else:
                 cls._validate_with_gts_id_tolerance(casted, to_schema_content, None)
-            is_fully_compatible = True
+            is_fully_compatible = is_backward and is_forward
         except js_exceptions.ValidationError as ve:
             reasons.append(ve.message)
             is_fully_compatible = False
@@ -422,6 +422,15 @@ class GtsEntityCastResult:
         return result
 
     @staticmethod
+    def _flatten_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for sub_schema in schema.get("allOf", []):
+            if isinstance(sub_schema, dict):
+                result.update(GtsEntityCastResult._flatten_property_schema(sub_schema))
+        result.update({key: value for key, value in schema.items() if key != "allOf"})
+        return result
+
+    @staticmethod
     def _flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
         """Flatten a schema by merging allOf schemas."""
         result = {"properties": {}, "required": []}
@@ -616,8 +625,12 @@ class GtsEntityCastResult:
         # Check properties that exist in both schemas
         common_props = set(old_props.keys()) & set(new_props.keys())
         for prop in common_props:
-            old_prop_schema = old_props[prop]
-            new_prop_schema = new_props[prop]
+            old_prop_schema = GtsEntityCastResult._flatten_property_schema(
+                old_props[prop]
+            )
+            new_prop_schema = GtsEntityCastResult._flatten_property_schema(
+                new_props[prop]
+            )
 
             # Check if type changed
             old_type = old_prop_schema.get("type")
@@ -647,6 +660,11 @@ class GtsEntityCastResult:
                         errors.append(
                             f"Property '{prop}' removed enum values: {removed_enum_values}"
                         )
+            elif old_enum:
+                if not check_backward:
+                    errors.append(f"Property '{prop}' removed enum constraint")
+            elif new_enum and check_backward:
+                errors.append(f"Property '{prop}' added enum constraint")
 
             # Check constraint compatibility
             constraint_errors = GtsEntityCastResult._check_constraint_compatibility(

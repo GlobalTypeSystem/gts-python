@@ -12,7 +12,9 @@ import yaml
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity, GtsFile
 from .store import GtsReader
 
-EXCLUDE_LIST = ["node_modules", "dist", "build"]
+# Default directory names skipped during recursive scanning. The CLI --exclude
+# option overrides this per invocation.
+DEFAULT_EXCLUDE_LIST = ["node_modules", "dist", "build", ".git", "target"]
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +22,20 @@ logger = logging.getLogger(__name__)
 class GtsFileReader(GtsReader):
     """Reads GTS entities from JSON and YAML files in directories specified by path."""
 
-    def __init__(self, path: str | list[str], cfg: GtsConfig | None = None) -> None:
+    def __init__(
+        self,
+        path: str | list[str],
+        cfg: GtsConfig | None = None,
+        exclude: list[str] | None = None,
+    ) -> None:
         """
         Initialize FileReader with one or more paths.
 
         Args:
             path: Single path string or list of paths (files or directories)
             cfg: GtsConfig for entity ID extraction (defaults to DEFAULT_GTS_CONFIG)
+            exclude: Directory names to skip while scanning (defaults to
+                DEFAULT_EXCLUDE_LIST)
         """
         self.paths: list[Path] = []
         if isinstance(path, str):
@@ -35,6 +44,7 @@ class GtsFileReader(GtsReader):
             self.paths = [Path(os.path.expanduser(p)) for p in path]
 
         self.cfg = cfg or DEFAULT_GTS_CONFIG
+        self.exclude = list(exclude) if exclude else list(DEFAULT_EXCLUDE_LIST)
         self._files: list[Path] = []
         self._current_index = 0
         self._current_file_entities: list[GtsEntity] = []
@@ -45,6 +55,7 @@ class GtsFileReader(GtsReader):
         """Collect all JSON and YAML files from the specified paths, following symlinks."""
         valid_extensions = {".json", ".jsonc", ".gts", ".yaml", ".yml"}
         seen: set[str] = set()
+        seen_dirs: set[tuple[int, int]] = set()
         collected: list[Path] = []
 
         for path in self.paths:
@@ -61,9 +72,15 @@ class GtsFileReader(GtsReader):
             elif resolved_path.is_dir():
                 # Recursively scan for all valid file types, following symlinks
                 for root, dirs, files in os.walk(resolved_path, followlinks=True):
-                    for exclude in EXCLUDE_LIST:
-                        if exclude in dirs:
-                            dirs.remove(exclude)
+                    # Prevent symlink cycles by tracking visited directory identities
+                    root_stat = os.stat(root)
+                    dir_id = (root_stat.st_dev, root_stat.st_ino)
+                    if dir_id in seen_dirs:
+                        dirs.clear()
+                        continue
+                    seen_dirs.add(dir_id)
+
+                    dirs[:] = [d for d in dirs if d not in self.exclude]
                     for fname in files:
                         ext = os.path.splitext(fname)[1].lower()
                         if ext in valid_extensions:

@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 
+from ._json_validation import GtsJsonValidator
 from ._server import GtsHttpServer
 from .ops import GtsOps
 
@@ -17,6 +18,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--path", help="Path to json and schema files or directories (global default)"
+    )
+    p.add_argument(
+        "--exclude",
+        default="node_modules,dist,build,.git,target",
+        help=(
+            "Comma-separated directory names to exclude when scanning "
+            "(default: node_modules,dist,build,.git,target)"
+        ),
     )
     sub = p.add_subparsers(dest="op", required=True)
 
@@ -33,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("uuid", help="Generate UUID from a GTS ID")
     s.add_argument("--gts-id", required=True)
     s.add_argument("--scope", choices=["major", "full"], default="major")
+
+    s = sub.add_parser(
+        "validate-all", help="Validate all JSON documents in a file or directory"
+    )
+    s.add_argument("--path", dest="scan_path", help="JSON file or directory to scan")
 
     s = sub.add_parser(
         "validate-instance", help="Validate an instance against its schema"
@@ -116,8 +130,16 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     try:
+        # Parse the comma-separated --exclude option into a list of dir names
+        exclude = [e.strip() for e in (args.exclude or "").split(",") if e.strip()]
+
         # Helper to create GtsOps with common arguments
-        ops = GtsOps(path=args.path, config=args.config, verbose=args.verbose)
+        ops = GtsOps(
+            path=args.path,
+            config=args.config,
+            verbose=args.verbose,
+            exclude=exclude,
+        )
 
         if args.op == "server":
             server = GtsHttpServer(ops=ops)
@@ -145,6 +167,17 @@ def main(argv: list[str] | None = None) -> None:
             out = {"ok": True, "out": args.out}
             json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
             sys.stdout.write("\n")
+            return
+        elif args.op == "validate-all":
+            scan_path = args.scan_path or args.path
+            if not scan_path:
+                parser.error("validate-all requires --path")
+            result = GtsJsonValidator(scan_path, ops.cfg, exclude=exclude).validate()
+            out = result.to_dict()
+            json.dump(out, sys.stdout, ensure_ascii=False, indent=2)
+            sys.stdout.write("\n")
+            if not result.ok:
+                raise SystemExit(1)
             return
         elif args.op == "validate-id":
             out = ops.validate_id(args.gts_id).to_dict()

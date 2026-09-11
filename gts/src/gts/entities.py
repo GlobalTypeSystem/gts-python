@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .gts import GtsID
+from .gts import GTS_PREFIX, GTS_URI_PREFIX, GtsID
 from .schema_cast import GtsEntityCastResult, SchemaCastError
 
 if TYPE_CHECKING:
@@ -130,7 +130,15 @@ class GtsEntity:
                 self.type_id and GtsID.is_valid(self.type_id)
             ):
                 idv = self.type_id
-            self.gts_id = GtsID(idv) if idv and GtsID.is_valid(idv) else None
+            # Enforce gts:// URI form for schema $id at the core layer. Per
+            # gts-spec, a schema must place its identifier in $id as a gts://
+            # URI, not the bare gts. prefix. Leaving gts_id as None makes every
+            # client (server, batch validator, direct callers) reject it
+            # uniformly, mirroring gts-go extract.go and gts-rust entities.rs.
+            if self.is_schema and self._schema_id_uses_plain_prefix():
+                self.gts_id = None
+            else:
+                self.gts_id = GtsID(idv) if idv and GtsID.is_valid(idv) else None
 
         # Set label
         if self.file and self.list_sequence is not None:
@@ -286,6 +294,21 @@ class GtsEntity:
             v = v.removeprefix("gts://")
             return v
         return None
+
+    def _schema_id_uses_plain_prefix(self) -> bool:
+        """Return True if the raw schema $id uses the bare gts. prefix.
+
+        Schemas must express their identifier as a gts:// URI in $id. A raw
+        $id that starts with the plain gts. prefix (without gts://) is invalid
+        and must not yield a gts_id.
+        """
+        if not isinstance(self.content, dict):
+            return False
+        raw = self.content.get("$id")
+        if not isinstance(raw, str):
+            return False
+        raw = raw.strip()
+        return raw.startswith(GTS_PREFIX) and not raw.startswith(GTS_URI_PREFIX)
 
     def _first_non_empty_field(self, fields: list[str]) -> tuple[str, str] | None:
         """Find first non-empty field value in order.

@@ -4,9 +4,9 @@
 
 A minimal, idiomatic Python library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and JSON/JSON Schema artifacts.
 
-## Roadmap
+Current supported GTS spec version: `0.13.1`
 
-Current supported GTS spec version: 0.13
+## Roadmap
 
 Featureset:
 
