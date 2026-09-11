@@ -167,13 +167,34 @@ def _verdict(result: bool | None) -> str:
     return COMPATIBLE if result else INCOMPATIBLE
 
 
+def _canonical_dialect(declared: str) -> str:
+    body = declared.removesuffix("#")
+    return body.removeprefix("https://").removeprefix("http://")
+
+
+def _dialect_changed(old_schema: Any, new_schema: Any) -> bool:
+    if not isinstance(old_schema, dict) or not isinstance(new_schema, dict):
+        return False
+    old_dialect = old_schema.get("$schema")
+    new_dialect = new_schema.get("$schema")
+    return (
+        isinstance(old_dialect, str)
+        and isinstance(new_dialect, str)
+        and _canonical_dialect(old_dialect) != _canonical_dialect(new_dialect)
+    )
+
+
 def check_backward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """new consumers read old data: ``Valid(old) subset-of Valid(new)``."""
+    if _dialect_changed(old_schema, new_schema):
+        return UNKNOWN
     return _verdict(_is_subschema(old_schema, new_schema))
 
 
 def check_forward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """old consumers read new data: ``Valid(new) subset-of Valid(old)``."""
+    if _dialect_changed(old_schema, new_schema):
+        return UNKNOWN
     return _verdict(_is_subschema(new_schema, old_schema))
 
 
