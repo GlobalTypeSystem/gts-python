@@ -11,10 +11,11 @@ SHELL := /bin/bash
 PYTHON_BOOTSTRAP ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
 PY_ENV_DIR ?= .venv
 ifeq ($(OS),Windows_NT)
-PYTHON ?= $(PY_ENV_DIR)/Scripts/python
+PY_ENV_PYTHON := $(PY_ENV_DIR)/Scripts/python.exe
 else
-PYTHON ?= $(PY_ENV_DIR)/bin/python
+PY_ENV_PYTHON := $(PY_ENV_DIR)/bin/python
 endif
+PYTHON ?= $(PY_ENV_PYTHON)
 PY_ENV_STAMP := $(PY_ENV_DIR)/.stamp
 INSTALL_STAMP := $(PY_ENV_DIR)/.install-stamp
 LOCAL_DIST_DIR := dist-install-local
@@ -39,10 +40,10 @@ help:
 # Create/update the virtual environment and install dev/test dependencies
 py-env: $(PY_ENV_STAMP)
 
-$(PY_ENV_DIR)/bin/python:
-	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
+$(PY_ENV_PYTHON):
+	$(PYTHON_BOOTSTRAP) -m venv --clear $(PY_ENV_DIR)
 
-$(PY_ENV_STAMP): gts/pyproject.toml .gts-spec/tests/requirements.txt Makefile
+$(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml .gts-spec/tests/requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
 	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
 	$(PYTHON) -m pip install --upgrade pip
@@ -64,7 +65,7 @@ build: py-env
 	$(PYTHON) -m build --outdir dist ./gts
 
 # Install the locally built wheel, equivalent to installing the published gts package
-install-local: $(if $(filter $(PY_ENV_DIR)/bin/python,$(PYTHON)),$(PY_ENV_DIR)/bin/python)
+install-local: $(if $(filter $(PY_ENV_PYTHON),$(PYTHON)),$(PY_ENV_PYTHON))
 	@rm -rf $(LOCAL_DIST_DIR)
 	$(PYTHON) -m pip install --upgrade build
 	$(PYTHON) -m build --outdir $(LOCAL_DIST_DIR) ./gts
