@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
-from jsonschema import RefResolver
+from jsonschema import FormatChecker, RefResolver
 from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
@@ -736,7 +736,9 @@ class GtsStore:
         schema_for_validation = _without_x_gts_ref(schema)
         validator_class = validator_for(schema_for_validation)
         validator = validator_class(
-            schema_for_validation, registry=self._create_reference_registry()
+            schema_for_validation,
+            registry=self._create_reference_registry(),
+            format_checker=FormatChecker(),
         )
         validator.validate(content)
 
