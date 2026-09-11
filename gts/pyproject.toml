@@ -11,7 +11,7 @@ authors = [{ name = "GTS Community" }]
 license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
 dependencies = [
-  "jsonschema>=4.18,<5",
+  "jsonschema[format-nongpl]>=4.18,<5",
   "referencing>=0.30,<0.37",
   "jsonsubschema>=0.0.8,<0.1",
   "fastapi>=0.110,<1",

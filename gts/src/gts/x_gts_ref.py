@@ -74,7 +74,9 @@ class XGtsRefValidationError(Exception):
 class XGtsRefValidator:
     """Validator for x-gts-ref constraints in GTS schemas."""
 
-    def __init__(self, store: Any | None = None):
+    def __init__(
+        self, store: Any | None = None, require_registered_target: bool = False
+    ):
         """
         Initialize validator.
 
@@ -82,6 +84,7 @@ class XGtsRefValidator:
             store: Optional GtsStore for resolving entity references
         """
         self.store = store
+        self.require_registered_target = require_registered_target
 
     def validate_instance(
         self, instance: dict[str, Any], schema: dict[str, Any], instance_path: str = ""
@@ -419,7 +422,9 @@ class XGtsRefValidator:
             )
 
         # Optionally check if entity exists in store
-        if self.store:
+        if self.store and (
+            not self.require_registered_target or self.store.get(pattern)
+        ):
             entity = self.store.get(value)
             if not entity:
                 return XGtsRefValidationError(
