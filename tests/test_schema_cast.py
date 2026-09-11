@@ -342,6 +342,20 @@ class TestCheckSchemaCompatibility:
         assert not ok
         assert any("removed enum values" in e for e in errors)
 
+    def test_backward_added_enum_constraint_flagged(self):
+        old = {"properties": {"a": {"allOf": [{}]}}}
+        new = {"properties": {"a": {"allOf": [{"enum": ["x"]}]}}}
+        ok, errors = GtsEntityCastResult._check_backward_compatibility(old, new)
+        assert not ok
+        assert any("added enum constraint" in e for e in errors)
+
+    def test_forward_removed_enum_constraint_flagged(self):
+        old = {"properties": {"a": {"allOf": [{"enum": ["x"]}]}}}
+        new = {"properties": {"a": {"allOf": [{}]}}}
+        ok, errors = GtsEntityCastResult._check_forward_compatibility(old, new)
+        assert not ok
+        assert any("removed enum constraint" in e for e in errors)
+
     def test_nested_object_errors_prefixed(self):
         old = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "string"}}}}}
         new = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "integer"}}}}}
