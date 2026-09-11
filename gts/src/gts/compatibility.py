@@ -132,6 +132,26 @@ def sanitize(schema: Any) -> Any:
     return schema
 
 
+def _lower_root_unevaluated_properties(schema: Any) -> Any | None:
+    if not isinstance(schema, dict) or "unevaluatedProperties" not in schema:
+        return schema
+    if any(
+        key in schema
+        for key in {"$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "dependentSchemas"}
+    ):
+        return None
+    unevaluated = schema["unevaluatedProperties"]
+    if (
+        "additionalProperties" in schema
+        and schema["additionalProperties"] != unevaluated
+    ):
+        return None
+    result = dict(schema)
+    result.pop("unevaluatedProperties")
+    result.setdefault("additionalProperties", unevaluated)
+    return result
+
+
 def _coerce_bool_schema(schema: Any) -> Any:
     """Turn a top-level boolean schema into its object-equivalent.
 
@@ -147,14 +167,18 @@ def _coerce_bool_schema(schema: Any) -> Any:
 
 def _is_subschema(subset: Any, superset: Any) -> bool | None:
     """``Valid(subset) subset-of Valid(superset)`` or ``None`` when unprovable."""
-    finite_result = _finite_subset(subset, superset)
+    lowered_subset = _lower_root_unevaluated_properties(subset)
+    lowered_superset = _lower_root_unevaluated_properties(superset)
+    if lowered_subset is None or lowered_superset is None:
+        return None
+    finite_result = _finite_subset(lowered_subset, lowered_superset)
     if finite_result is not None:
         return finite_result
     try:
         return bool(
             isSubschema(
-                _coerce_bool_schema(sanitize(subset)),
-                _coerce_bool_schema(sanitize(superset)),
+                _coerce_bool_schema(sanitize(lowered_subset)),
+                _coerce_bool_schema(sanitize(lowered_superset)),
             )
         )
     except Exception:  # noqa: BLE001 - intentional broad fallback
