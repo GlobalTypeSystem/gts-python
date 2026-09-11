@@ -170,9 +170,7 @@ class TestMatchIdPattern:
         assert result.match is True
 
     def test_match_false(self, ops):
-        result = ops.match_id_pattern(
-            "gts.x.other._.foo.v1~", "gts.x.test.*"
-        )
+        result = ops.match_id_pattern("gts.x.other._.foo.v1~", "gts.x.test.*")
         assert result.match is False
 
     def test_match_malformed_wildcard_candidate(self, ops):
@@ -239,6 +237,73 @@ class TestValidateInstanceSchemaEntity:
         assert result.entity_type == ""
 
 
+class TestValidateJson:
+    def test_validates_schema_without_storing_it(self, ops):
+        result = ops.validate_json(SCHEMA)
+
+        assert result.ok is True
+        assert result.is_type_schema is True
+        assert ops.store.get(SCHEMA["$id"].removeprefix("gts://")) is None
+
+    def test_validates_derived_schema_against_registered_parent(self, ops):
+        ops.add_entity(SCHEMA)
+        derived_schema = {
+            "$id": "gts://gts.x.test._.foo.v1~x.test._.bar.v1~",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "allOf": [{"$ref": "gts://gts.x.test._.foo.v1~"}],
+        }
+
+        result = ops.validate_json(derived_schema)
+
+        assert result.ok is True
+        assert ops.store.get("gts.x.test._.foo.v1~x.test._.bar.v1~") is None
+
+    def test_validates_instance_against_explicit_type_without_storing_it(self, ops):
+        ops.add_entity(SCHEMA)
+        instance = {"name": "hi"}
+
+        result = ops.validate_json(instance, explicit_type_id="gts.x.test._.foo.v1~")
+
+        assert result.ok is True
+        assert result.type_id == "gts.x.test._.foo.v1~"
+
+    def test_does_not_mutate_registry(self, ops, monkeypatch):
+        monkeypatch.setattr(
+            ops.store,
+            "register",
+            lambda entity: pytest.fail(
+                "transient validation must not register entities"
+            ),
+        )
+        monkeypatch.setattr(
+            ops.store,
+            "unregister",
+            lambda entity_id: pytest.fail(
+                "transient validation must not unregister entities"
+            ),
+        )
+
+        result = ops.validate_json(SCHEMA)
+
+        assert result.ok is True
+
+    def test_rejects_missing_automatic_instance_type(self, ops):
+        result = ops.validate_json({"id": "gts.x.test._.missing_type.v1"})
+
+        assert result.ok is False
+        assert result.error == "Unable to determine instance type"
+
+    def test_rejects_explicit_type_that_conflicts_with_body(self, ops):
+        result = ops.validate_json(
+            {"type": "gts.x.test._.other.v1~"},
+            explicit_type_id="gts.x.test._.foo.v1~",
+        )
+
+        assert result.ok is False
+        assert "does not match path type" in result.error
+
+
 class TestSchemaGraphCompatibilityCast:
     def test_schema_graph(self, ops):
         ops.add_entity(SCHEMA)
@@ -258,7 +323,9 @@ class TestSchemaGraphCompatibilityCast:
         assert result.error == ""
 
     def test_cast_error_wrapped(self, ops):
-        result = ops.cast("gts.x.test._.foo.v1~x.test._.missing.v1", "gts.x.test._.foo.v1~")
+        result = ops.cast(
+            "gts.x.test._.foo.v1~x.test._.missing.v1", "gts.x.test._.foo.v1~"
+        )
         assert result.error != ""
 
 
