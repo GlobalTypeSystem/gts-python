@@ -137,7 +137,7 @@ def _lower_root_unevaluated_properties(schema: Any) -> Any | None:
         return schema
     if any(
         key in schema
-        for key in {"$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "dependentSchemas"}
+        for key in ("$ref", "$dynamicRef", "allOf", "anyOf", "oneOf", "not", "dependentSchemas")
     ):
         return None
     unevaluated = schema["unevaluatedProperties"]
@@ -196,7 +196,7 @@ def _canonical_dialect(declared: str) -> str:
     return body.removeprefix("https://").removeprefix("http://")
 
 
-def _dialect_changed(old_schema: Any, new_schema: Any) -> bool:
+def dialects_differ(old_schema: Any, new_schema: Any) -> bool:
     if not isinstance(old_schema, dict) or not isinstance(new_schema, dict):
         return False
     old_dialect = old_schema.get("$schema")
@@ -210,14 +210,14 @@ def _dialect_changed(old_schema: Any, new_schema: Any) -> bool:
 
 def check_backward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """new consumers read old data: ``Valid(old) subset-of Valid(new)``."""
-    if _dialect_changed(old_schema, new_schema):
+    if dialects_differ(old_schema, new_schema):
         return UNKNOWN
     return _verdict(_is_subschema(old_schema, new_schema))
 
 
 def check_forward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """old consumers read new data: ``Valid(new) subset-of Valid(old)``."""
-    if _dialect_changed(old_schema, new_schema):
+    if dialects_differ(old_schema, new_schema):
         return UNKNOWN
     return _verdict(_is_subschema(new_schema, old_schema))
 

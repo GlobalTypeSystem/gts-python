@@ -8,6 +8,7 @@ from typing import Any
 from jsonschema import exceptions as js_exceptions
 from jsonschema import validate as js_validate
 
+from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,7 @@ class GtsEntityCastResult:
         is_forward, forward_errors = cls._check_forward_compatibility(
             old_schema, new_schema
         )
+        dialect_changed = dialects_differ(old_schema, new_schema)
 
         # Apply casting rules to the instance
         added: list[str] = []
@@ -151,6 +153,9 @@ class GtsEntityCastResult:
                 backward_errors=backward_errors,
                 forward_errors=forward_errors,
                 casted_entity=None,
+                backward_verdict=UNKNOWN if dialect_changed else None,
+                forward_verdict=UNKNOWN if dialect_changed else None,
+                full_verdict=UNKNOWN if dialect_changed else None,
             )
 
         # Validate the transformed instance against the FULL target schema
@@ -179,6 +184,9 @@ class GtsEntityCastResult:
             backward_errors=backward_errors,
             forward_errors=forward_errors,
             casted_entity=casted,
+            backward_verdict=UNKNOWN if dialect_changed else None,
+            forward_verdict=UNKNOWN if dialect_changed else None,
+            full_verdict=UNKNOWN if dialect_changed else None,
         )
 
     @staticmethod
