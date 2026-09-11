@@ -5,6 +5,7 @@ coroutines via asyncio.run to avoid pulling in an HTTP test client dependency.
 import asyncio
 
 import pytest
+from fastapi.responses import JSONResponse
 
 from gts.ops import GtsOps
 from gts._server import GtsHttpServer, ValidateEntityRequest, _RequestLoggingMiddleware
@@ -190,7 +191,7 @@ class TestRequestLoggingMiddlewareVerboseOff:
         middleware = _RequestLoggingMiddleware(server.app, verbose=0)
 
         async def call_next(request):
-            return "response-sentinel"
+            return JSONResponse({"ok": True})
 
         result = run(middleware.dispatch(request=None, call_next=call_next))
-        assert result == "response-sentinel"
+        assert result.headers["connection"] == "close"

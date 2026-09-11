@@ -41,7 +41,9 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         if not self.verbose:
-            return await call_next(request)
+            response = await call_next(request)
+            response.headers["connection"] = "close"
+            return response
 
         start = time.time()
 
@@ -60,6 +62,7 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
             request = Request(request.scope, receive)
 
         response = await call_next(request)
+        response.headers["connection"] = "close"
         dur = (time.time() - start) * 1000.0
 
         # Determine status color
@@ -275,6 +278,18 @@ class GtsHttpServer:
             methods=["POST"],
             summary="Validate instance by GTS ID",
         )
+        app.add_api_route(
+            "/validate-json",
+            self.validate_json,
+            methods=["POST"],
+            summary="Validate unregistered JSON entity",
+        )
+        app.add_api_route(
+            "/validate-json/{gts_type:path}",
+            self.validate_json_as_type,
+            methods=["POST"],
+            summary="Validate unregistered JSON instance against a type",
+        )
         # Op #12 - validate type schema
         app.add_api_route(
             "/validate-type-schema",
@@ -370,6 +385,19 @@ class GtsHttpServer:
 
     async def validate_instance(self, body: ValidateInstanceRequest) -> dict[str, Any]:
         return self.ops.validate_instance(body.instance_id).to_dict()
+
+    async def validate_json(
+        self,
+        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+    ) -> dict[str, Any]:
+        return self.ops.validate_json(body).to_dict()
+
+    async def validate_json_as_type(
+        self,
+        gts_type: str,
+        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+    ) -> dict[str, Any]:
+        return self.ops.validate_json(body, explicit_type_id=gts_type).to_dict()
 
     async def validate_type_schema(
         self, body: ValidateTypeSchemaRequest
