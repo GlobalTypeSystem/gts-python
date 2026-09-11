@@ -348,12 +348,10 @@ class GtsEntity:
                 # type_id is the parent (everything up to the second-to-last '~').
                 # idv ends with '~' for schemas.
                 # Strip trailing '~' to find internal chain boundaries.
-                inner = idv.removesuffix("~")
-                last_tilde = inner.rfind("~")
-                if last_tilde > 0:
-                    # Has at least 2 segments - return parent chain
+                parent_type_id = GtsID(idv).parent_type_id
+                if parent_type_id:
                     self.selected_type_id_field = "$id"
-                    return inner[: last_tilde + 1]
+                    return parent_type_id
             # Base schema (single segment) - no GTS parent type.
             # The $schema URL is NOT a GTS Type Identifier.
             return None
@@ -368,17 +366,13 @@ class GtsEntity:
             if entity_id_cand[0] == "$id" and not self.is_schema:
                 pass  # Skip to PRIORITY 2
             else:
-                idv = entity_id_cand[1]
                 # If already a type id (ends with '~'), use it as-is
-                if idv.endswith("~"):
-                    self.selected_type_id_field = entity_id_cand[0]
-                    return idv
                 # For chained IDs (well-known instances), extract schema:
                 # everything up to and including last '~'
-                last_tilde = idv.rfind("~")
-                if last_tilde > 0:
+                type_id = GtsID(entity_id_cand[1]).type_id
+                if type_id:
                     self.selected_type_id_field = entity_id_cand[0]
-                    return idv[: last_tilde + 1]
+                    return type_id
 
         # PRIORITY 2: Fall back to explicit schema_id_fields (type, gtsTid, etc.)
         # Only check these if no chained GTS ID was found in entity_id_fields
@@ -389,10 +383,7 @@ class GtsEntity:
             type_id_val = cand[1]
             # If type_id is a chained GTS ID, extract parent (base type)
             if GtsID.is_valid(type_id_val):
-                last_tilde = type_id_val.rfind("~")
-                if last_tilde > 0 and not type_id_val.endswith("~"):
-                    # It's an instance ID in type field - extract schema part
-                    return type_id_val[: last_tilde + 1]
+                return GtsID(type_id_val).type_id
             return type_id_val
 
         # No schema reference found for instance

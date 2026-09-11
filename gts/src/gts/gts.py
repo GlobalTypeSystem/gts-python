@@ -282,7 +282,26 @@ class GtsID:
 
     @property
     def is_type(self) -> bool:
-        return self.id.endswith("~")
+        return self.gts_id_segments[-1].is_type
+
+    @property
+    def is_instance(self) -> bool:
+        return not self.is_type
+
+    @property
+    def type_id(self) -> str | None:
+        return self.id if self.is_type else self.get_type_id()
+
+    @property
+    def parent_type_id(self) -> str | None:
+        return self.get_type_id() if self.is_type else None
+
+    @classmethod
+    def parse_type(cls, value: str) -> GtsID:
+        normalized = value.strip().removeprefix(GTS_URI_PREFIX)
+        if not normalized.endswith("~"):
+            raise GtsInvalidId(value, "must end with '~'")
+        return cls(value)
 
     def get_type_id(self) -> str | None:
         if len(self.gts_id_segments) < 2:
