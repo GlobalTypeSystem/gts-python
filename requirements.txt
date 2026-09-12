@@ -1,4 +1,16 @@
-jsonschema
-dataclasses
-fastapi
-uvicorn
+# Development / test tooling for the local GTS venv (see Makefile `py-env`).
+#
+# Runtime dependencies live in gts/pyproject.toml. This file holds the extra
+# tooling plus version overrides needed by the local workflow, where the GTS
+# server and the httprunner-based spec test client share a single virtualenv.
+#
+# It is installed AFTER .gts-spec/tests/requirements.txt so the pydantic pin
+# below overrides the spec client's `pydantic<2` pin: the server uses pydantic
+# v2 APIs (e.g. model_validator) and httprunner runs fine on v2. (httprunner
+# itself is installed separately with --no-deps in the Makefile because its
+# declared pins are incompatible with this venv.)
+pydantic>=2,<3
+
+# Linters / type checker.
+ruff
+mypy

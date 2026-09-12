@@ -7,17 +7,25 @@ from collections.abc import Iterator
 from typing import Any
 
 from jsonschema import RefResolver
-from jsonschema.validators import validator_for
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from . import compatibility, derivation, traits
+from ._naming import looks_like_gts, strip_scheme, with_scheme
 from .entities import GtsEntity
-from .gts import GtsID, GtsWildcard
+from .gts import GtsID, GtsRef, GtsWildcard
 from .schema_cast import GtsEntityCastResult
+from .schema_validation import FORMAT_CHECKER, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
+
+
+def _require_schema_id(value: str) -> GtsID:
+    try:
+        return GtsID.parse_type(value)
+    except ValueError as error:
+        raise ValueError(f"ID '{value}' is not a schema (must end with '~')") from error
 
 
 class StoreGtsObjectNotFound(Exception):
@@ -159,19 +167,21 @@ class GtsStore:
         Register a schema (legacy method for backward compatibility).
         Creates a JsonEntity from the schema dict.
         """
-        if not type_id.endswith("~"):
-            raise ValueError("Schema type_id must end with '~'")
-        # parse sanity
-        gts_id = GtsID(type_id)
+        gts_id = GtsID.parse_type(type_id)
         entity = GtsEntity(content=schema, gts_id=gts_id, is_schema=True)
-        self._by_id[type_id] = entity
+        self._by_id[gts_id.id] = entity
 
     def get(self, entity_id: str) -> GtsEntity | None:
         """
         Get a JsonEntity by its ID.
         If not found in cache, try to fetch from reader.
         Returns None if not found.
+
+        Lookups are normalized to the canonical bare form here, so callers may
+        pass either a bare ``gts.`` id or a ``gts://`` URI without stripping the
+        scheme themselves.
         """
+        entity_id = strip_scheme(entity_id)
         # Check cache first
         if entity_id in self._by_id:
             return self._by_id[entity_id]
@@ -196,13 +206,14 @@ class GtsStore:
         """Create a custom RefResolver that can resolve GTS ID references from the store."""
 
         def resolve_gts_ref(uri: str) -> dict[str, Any]:
-            """Resolve a GTS ID reference to its schema content."""
-            # Issue #32: handle gts:// prefix
-            uri = uri.removeprefix("gts://")
+            """Resolve a GTS ID reference to its schema content.
+
+            ``get_schema_content`` normalizes the ``gts://`` scheme internally.
+            """
             try:
                 return self.get_schema_content(uri)
             except KeyError as e:
-                raise ValueError(f"Unresolvable: {uri}") from e
+                raise ValueError(f"Unresolvable: {strip_scheme(uri)}") from e
 
         # Create a store dict that maps GTS IDs to their schema content
         store = {}
@@ -224,7 +235,7 @@ class GtsStore:
                     _without_x_gts_ref(entity.content),
                     default_specification=DRAFT202012,
                 )
-                registry = registry.with_resource(f"gts://{entity_id}", resource)
+                registry = registry.with_resource(with_scheme(entity_id), resource)
         return registry
 
     def items(self):
@@ -254,19 +265,18 @@ class GtsStore:
                 ref_uri = schema["$ref"]
                 if isinstance(ref_uri, str):
                     current_path = f"{path}.$ref" if path else "$ref"
+                    ref = GtsRef.parse(ref_uri)
 
-                    # Local refs (JSON Pointer) are always valid
-                    if ref_uri.startswith("#"):
-                        pass  # Valid local ref
-                    # GTS refs must use gts:// URI format
-                    elif ref_uri.startswith("gts://"):
-                        gts_id = ref_uri[6:]  # Strip prefix
-                        # Validate the GTS ID
-                        if not GtsID.is_valid(gts_id):
+                    # Local refs (JSON Pointer) are always valid.
+                    if ref.is_local:
+                        pass
+                    # External GTS refs MUST use the gts:// URI form.
+                    elif ref.is_gts and ref.has_scheme:
+                        if not GtsID.is_valid(ref.target_id):
                             raise ValueError(
-                                f"Invalid $ref at '{current_path}': '{ref_uri}' contains invalid GTS identifier '{gts_id}'"
+                                f"Invalid $ref at '{current_path}': '{ref_uri}' contains invalid GTS identifier '{ref.target_id}'"
                             )
-                    # Any other external ref is invalid
+                    # Anything else (bare gts., external URL, ...) is invalid.
                     else:
                         raise ValueError(
                             f"Invalid $ref at '{current_path}': '{ref_uri}' must be a local ref (starting with '#') "
@@ -292,17 +302,15 @@ class GtsStore:
         Args:
             gts_id: The GTS ID of the schema to validate
         """
-        if not gts_id.endswith("~"):
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
-
-        schema_entity = self.get(gts_id)
+        schema_id = _require_schema_id(gts_id)
+        schema_entity = self.get(schema_id.id)
         if not schema_entity:
-            raise StoreGtsSchemaNotFound(gts_id)
+            raise StoreGtsSchemaNotFound(schema_id.id)
 
         if not schema_entity.is_schema:
-            raise ValueError(f"Entity '{gts_id}' is not a schema")
+            raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
-        self._validate_schema_x_gts_refs_content(gts_id, schema_entity.content)
+        self._validate_schema_x_gts_refs_content(schema_id.id, schema_entity.content)
 
     def _validate_schema_x_gts_refs_content(
         self, gts_id: str, schema_content: dict[str, Any]
@@ -489,11 +497,10 @@ class GtsStore:
         if isinstance(node, dict):
             ref_uri = node.get("$ref")
             if isinstance(ref_uri, str):
-                ref_id: str | None = None
-                if ref_uri.startswith("gts://"):
-                    ref_id = ref_uri[6:]
-                elif not ref_uri.startswith("#"):
-                    ref_id = ref_uri
+                ref = GtsRef.parse(ref_uri)
+                # Local (#/...) refs are resolved by JSON Schema itself; only
+                # external targets are inlined from the store.
+                ref_id = None if ref.is_local else ref.target_id
                 if ref_id is not None:
                     if ref_id in seen:
                         # Cycle detected: leave the $ref unresolved.
@@ -613,15 +620,13 @@ class GtsStore:
         3. GTS keyword validation (x-gts-final, x-gts-abstract, placement)
         4. JSON Schema meta-schema validation
         """
-        if not gts_id.endswith("~"):
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
-
-        schema_entity = self.get(gts_id)
+        schema_id = _require_schema_id(gts_id)
+        schema_entity = self.get(schema_id.id)
         if not schema_entity:
-            raise StoreGtsSchemaNotFound(gts_id)
+            raise StoreGtsSchemaNotFound(schema_id.id)
 
         if not schema_entity.is_schema:
-            raise ValueError(f"Entity '{gts_id}' is not a schema")
+            raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
         schema_content = schema_entity.content
         if not isinstance(schema_content, dict):
@@ -633,7 +638,7 @@ class GtsStore:
         if (
             meta_schema_url
             and isinstance(meta_schema_url, str)
-            and meta_schema_url.startswith(("gts.", "gts://"))
+            and looks_like_gts(meta_schema_url)
         ):
             raise ValueError(
                 f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
@@ -652,15 +657,13 @@ class GtsStore:
         self, gts_id: str, schema_content: dict[str, Any]
     ) -> None:
         """Validate a schema using the registry only for its dependencies."""
-        schema_id = GtsID(gts_id)
-        if not schema_id.is_type:
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
+        schema_id = _require_schema_id(gts_id)
 
         meta_schema_url = schema_content.get("$schema")
         if (
             meta_schema_url
             and isinstance(meta_schema_url, str)
-            and meta_schema_url.startswith(("gts.", "gts://"))
+            and looks_like_gts(meta_schema_url)
         ):
             raise ValueError(
                 f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
@@ -674,7 +677,6 @@ class GtsStore:
 
         try:
             from jsonschema import Draft7Validator
-            from jsonschema.validators import validator_for
 
             if meta_schema_url:
                 validator_class = validator_for({"$schema": meta_schema_url})
@@ -698,14 +700,7 @@ class GtsStore:
 
     def validate_schema(self, gts_id: str) -> None:
         """Validate a registered schema and all of its dependencies."""
-        try:
-            schema_id = GtsID(gts_id)
-        except ValueError as error:
-            raise ValueError(
-                f"ID '{gts_id}' is not a schema (must end with '~')"
-            ) from error
-        if not schema_id.is_type:
-            raise ValueError(f"ID '{gts_id}' is not a schema (must end with '~')")
+        schema_id = _require_schema_id(gts_id)
 
         schema_entity = self.get(schema_id.id)
         if not schema_entity:
@@ -720,9 +715,7 @@ class GtsStore:
 
     def validate_instance_content(self, content: dict[str, Any], type_id: str) -> None:
         """Validate unregistered instance content against a registered type schema."""
-        schema_type = GtsID(type_id)
-        if not schema_type.is_type:
-            raise ValueError(f"ID '{type_id}' is not a schema (must end with '~')")
+        schema_type = _require_schema_id(type_id)
         try:
             schema = self.get_schema_content(schema_type.id)
         except KeyError as error:
@@ -736,7 +729,9 @@ class GtsStore:
         schema_for_validation = _without_x_gts_ref(schema)
         validator_class = validator_for(schema_for_validation)
         validator = validator_class(
-            schema_for_validation, registry=self._create_reference_registry()
+            schema_for_validation,
+            registry=self._create_reference_registry(),
+            format_checker=FORMAT_CHECKER,
         )
         validator.validate(content)
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path as SysPath
 from typing import Any
 
+from ._naming import looks_like_gts
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
 from .gts import GtsID, GtsWildcard
@@ -557,7 +558,7 @@ class GtsOps:
             try:
                 explicit_type = GtsID(explicit_type_id)
             except ValueError:
-                if explicit_type_id.startswith(("gts.", "gts://")):
+                if looks_like_gts(explicit_type_id):
                     return GtsJsonValidationResult(
                         ok=False,
                         error=f"Explicit type '{explicit_type_id}' must be GTS Type schema",
