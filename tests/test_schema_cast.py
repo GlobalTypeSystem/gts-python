@@ -116,13 +116,33 @@ class TestFlattenSchema:
         assert set(flat["properties"].keys()) == {"a", "b"}
         assert set(flat["required"]) == {"a", "b"}
 
-    def test_additional_properties_top_level_overrides(self):
+    def test_additional_properties_intersects_allof_members(self):
         schema = {
             "allOf": [{"additionalProperties": False}],
             "additionalProperties": True,
         }
         flat = GtsEntityCastResult._flatten_schema(schema)
-        assert flat["additionalProperties"] is True
+        assert flat["additionalProperties"] is False
+
+    def test_intersected_additional_properties_removes_extra_values(self):
+        flat = GtsEntityCastResult._flatten_schema(
+            {"allOf": [{"additionalProperties": False}], "additionalProperties": True}
+        )
+        casted, _, removed, _ = GtsEntityCastResult._cast_instance_to_schema(
+            {"extra": "value"}, flat
+        )
+        assert casted == {}
+        assert removed == ["extra"]
+
+    def test_intersects_repeated_property_constraints(self):
+        schema = {
+            "allOf": [
+                {"properties": {"name": {"type": "string", "minLength": 1}}},
+                {"properties": {"name": {"type": "string", "minLength": 5}}},
+            ]
+        }
+        flat = GtsEntityCastResult._flatten_schema(schema)
+        assert flat["properties"]["name"]["minLength"] == 5
 
 
 class TestCastInstanceToSchema:
@@ -294,6 +314,22 @@ class TestCheckConstraintCompatibility:
             "p", {"type": "string", "minLength": 1}, {"type": "string", "minLength": 5}
         )
         assert errors
+
+    def test_allof_tightened_string_constraint_is_checked(self):
+        old = {"properties": {"name": {"type": "string", "minLength": 1}}}
+        new = {
+            "properties": {
+                "name": {
+                    "allOf": [
+                        {"type": "string", "minLength": 1},
+                        {"type": "string", "minLength": 5},
+                    ]
+                }
+            }
+        }
+        compatible, errors = GtsEntityCastResult._check_backward_compatibility(old, new)
+        assert compatible is False
+        assert any("minLength increased" in error for error in errors)
 
     def test_array_constraints_checked(self):
         errors = GtsEntityCastResult._check_constraint_compatibility(
@@ -525,6 +561,9 @@ class TestCastClassmethod:
         assert result.to_dict()["backward_compatibility"] == "unknown"
         assert result.to_dict()["forward_compatibility"] == "unknown"
         assert result.to_dict()["full_compatibility"] == "unknown"
+        assert result.is_backward_compatible is None
+        assert result.is_forward_compatible is None
+        assert result.is_fully_compatible is None
 
     def test_cast_with_non_dict_instance_content_defaults_to_empty(self):
         result = GtsEntityCastResult.cast(
