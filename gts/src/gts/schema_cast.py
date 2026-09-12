@@ -437,16 +437,30 @@ class GtsEntityCastResult:
     def _merge_constraint_value(key: str, existing: Any, incoming: Any) -> Any | None:
         if existing == incoming:
             return copy.deepcopy(existing)
-        if key in {"minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties"}:
+        if key in {
+            "minimum",
+            "exclusiveMinimum",
+            "minLength",
+            "minItems",
+            "minProperties",
+        }:
             return max(existing, incoming)
-        if key in {"maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"}:
+        if key in {
+            "maximum",
+            "exclusiveMaximum",
+            "maxLength",
+            "maxItems",
+            "maxProperties",
+        }:
             return min(existing, incoming)
         if key == "enum" and isinstance(existing, list) and isinstance(incoming, list):
             return [value for value in existing if value in incoming]
         if key == "type":
             existing_types = existing if isinstance(existing, list) else [existing]
             incoming_types = incoming if isinstance(incoming, list) else [incoming]
-            common_types = [value for value in existing_types if value in incoming_types]
+            common_types = [
+                value for value in existing_types if value in incoming_types
+            ]
             return common_types[0] if len(common_types) == 1 else common_types
         if key == "additionalProperties":
             if existing is False or incoming is False:
@@ -533,7 +547,9 @@ class GtsEntityCastResult:
                         key, result[key], value
                     )
                     if merged is None:
-                        result.setdefault("allOf", []).append({key: copy.deepcopy(value)})
+                        result.setdefault("allOf", []).append(
+                            {key: copy.deepcopy(value)}
+                        )
                     else:
                         result[key] = merged
 

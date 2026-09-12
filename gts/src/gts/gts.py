@@ -508,9 +508,7 @@ class GtsRef:
     GTS = "gts"
     OTHER = "other"
 
-    def __init__(
-        self, raw: str, kind: str, target_id: str, has_scheme: bool
-    ) -> None:
+    def __init__(self, raw: str, kind: str, target_id: str, has_scheme: bool) -> None:
         self.raw = raw
         self.kind = kind
         # Canonical bare target for non-local refs; empty for local pointers
