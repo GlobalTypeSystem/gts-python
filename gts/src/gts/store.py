@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
-from jsonschema import FormatChecker, RefResolver
+from jsonschema import RefResolver
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
@@ -15,7 +15,7 @@ from ._naming import looks_like_gts, strip_scheme, with_scheme
 from .entities import GtsEntity
 from .gts import GtsID, GtsRef, GtsWildcard
 from .schema_cast import GtsEntityCastResult
-from .schema_validation import validator_for
+from .schema_validation import FORMAT_CHECKER, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
@@ -731,7 +731,7 @@ class GtsStore:
         validator = validator_class(
             schema_for_validation,
             registry=self._create_reference_registry(),
-            format_checker=FormatChecker(),
+            format_checker=FORMAT_CHECKER,
         )
         validator.validate(content)
 

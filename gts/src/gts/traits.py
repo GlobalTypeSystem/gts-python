@@ -19,10 +19,9 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from jsonschema import Draft7Validator, FormatChecker
-
 from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
+from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
 from .schema_validation import validator_for
 from .x_gts_ref import XGtsRefValidator
 
@@ -30,8 +29,6 @@ X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
 X_GTS_TRAITS = "x-gts-traits"
 MAX_RECURSION_DEPTH = 64
 _MISSING = object()
-_FORMAT_CHECKER = FormatChecker()
-_FORMAT_CHECKER.checkers.update(Draft7Validator.FORMAT_CHECKER.checkers)
 
 
 class EffectiveTraits:

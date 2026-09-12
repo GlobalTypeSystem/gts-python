@@ -316,13 +316,15 @@ class TestGtsStoreValidation:
             },
         )
 
+        # RFC 3339 "time" (draft-07) requires a timezone offset, so a valid
+        # value must carry one (e.g. the "Z" UTC designator).
         store.validate_instance_content(
-            {"uuid": "550e8400-e29b-41d4-a716-446655440000", "time": "10:30:00"},
+            {"uuid": "550e8400-e29b-41d4-a716-446655440000", "time": "10:30:00Z"},
             type_id,
         )
         with pytest.raises(ValidationError):
             store.validate_instance_content(
-                {"uuid": "not-a-uuid", "time": "10:30:00"}, type_id
+                {"uuid": "not-a-uuid", "time": "10:30:00Z"}, type_id
             )
         with pytest.raises(ValidationError):
             store.validate_instance_content(
