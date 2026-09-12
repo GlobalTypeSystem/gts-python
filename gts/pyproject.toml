@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gts"
-version = "0.13.1"
+version = "0.13.2"
 description = "Global Type System (GTS) helpers: identifiers, parsing, validation, and operations"
 readme = "README.md"
 authors = [{ name = "GTS Community" }]
