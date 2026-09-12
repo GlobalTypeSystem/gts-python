@@ -26,9 +26,9 @@ class GtsEntityCastResult:
     added_properties: list[str] = None  # type: ignore
     removed_properties: list[str] = None  # type: ignore
     changed_properties: list[dict[str, str]] = None  # type: ignore
-    is_fully_compatible: bool = False
-    is_backward_compatible: bool = False
-    is_forward_compatible: bool = False
+    is_fully_compatible: bool | None = False
+    is_backward_compatible: bool | None = False
+    is_forward_compatible: bool | None = False
     incompatibility_reasons: list[str] = None  # type: ignore
     backward_errors: list[str] = None  # type: ignore
     forward_errors: list[str] = None  # type: ignore
@@ -56,7 +56,9 @@ class GtsEntityCastResult:
             self.forward_errors = []
 
     def to_dict(self) -> dict[str, Any]:
-        def _compat_str(val: bool) -> str:
+        def _compat_str(val: bool | None) -> str:
+            if val is None:
+                return UNKNOWN
             return "compatible" if val else "incompatible"
 
         backward = self.backward_verdict or _compat_str(self.is_backward_compatible)
@@ -146,9 +148,9 @@ class GtsEntityCastResult:
                 added_properties=sorted(dict.fromkeys(added)),
                 removed_properties=sorted(dict.fromkeys(removed)),
                 changed_properties=[],
-                is_fully_compatible=False,
-                is_backward_compatible=is_backward,
-                is_forward_compatible=is_forward,
+                is_fully_compatible=None if dialect_changed else False,
+                is_backward_compatible=None if dialect_changed else is_backward,
+                is_forward_compatible=None if dialect_changed else is_forward,
                 incompatibility_reasons=[str(e)],
                 backward_errors=backward_errors,
                 forward_errors=forward_errors,
@@ -177,9 +179,9 @@ class GtsEntityCastResult:
             added_properties=sorted(dict.fromkeys(added)),
             removed_properties=sorted(dict.fromkeys(removed)),
             changed_properties=[],
-            is_fully_compatible=is_fully_compatible,
-            is_backward_compatible=is_backward,
-            is_forward_compatible=is_forward,
+            is_fully_compatible=None if dialect_changed else is_fully_compatible,
+            is_backward_compatible=None if dialect_changed else is_backward,
+            is_forward_compatible=None if dialect_changed else is_forward,
             incompatibility_reasons=reasons,
             backward_errors=backward_errors,
             forward_errors=forward_errors,
@@ -432,30 +434,69 @@ class GtsEntityCastResult:
         return result
 
     @staticmethod
+    def _merge_constraint_value(key: str, existing: Any, incoming: Any) -> Any | None:
+        if existing == incoming:
+            return copy.deepcopy(existing)
+        if key in {"minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties"}:
+            return max(existing, incoming)
+        if key in {"maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"}:
+            return min(existing, incoming)
+        if key == "enum" and isinstance(existing, list) and isinstance(incoming, list):
+            return [value for value in existing if value in incoming]
+        if key == "type":
+            existing_types = existing if isinstance(existing, list) else [existing]
+            incoming_types = incoming if isinstance(incoming, list) else [incoming]
+            common_types = [value for value in existing_types if value in incoming_types]
+            return common_types[0] if len(common_types) == 1 else common_types
+        if key == "additionalProperties":
+            if existing is False or incoming is False:
+                return False
+            if existing is True:
+                return copy.deepcopy(incoming)
+            if incoming is True:
+                return copy.deepcopy(existing)
+        return None
+
+    @staticmethod
     def _flatten_property_schema(schema: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
+
+        def merge(key: str, value: Any) -> None:
+            if key not in result:
+                result[key] = copy.deepcopy(value)
+                return
+            merged = GtsEntityCastResult._merge_constraint_value(
+                key, result[key], value
+            )
+            if merged is None:
+                result.setdefault("allOf", []).append({key: copy.deepcopy(value)})
+            else:
+                result[key] = merged
+
         for sub_schema in schema.get("allOf", []):
             if isinstance(sub_schema, dict):
                 for key, value in GtsEntityCastResult._flatten_property_schema(
                     sub_schema
                 ).items():
-                    if key in result and result[key] != value:
-                        result = {"allOf": [result, {key: copy.deepcopy(value)}]}
-                    else:
-                        result[key] = copy.deepcopy(value)
+                    merge(key, value)
         for key, value in schema.items():
             if key != "allOf":
-                if key in result and result[key] != value:
-                    result = {"allOf": [result, {key: copy.deepcopy(value)}]}
-                else:
-                    result[key] = copy.deepcopy(value)
+                merge(key, value)
         return result
 
     @staticmethod
     def _merge_property_schemas(existing: Any, incoming: Any) -> Any:
         if existing == incoming:
             return copy.deepcopy(existing)
-        return {"allOf": [copy.deepcopy(existing), copy.deepcopy(incoming)]}
+        # Intersect the two property sub-schemas so repeated constraints (e.g.
+        # minLength across allOf members) collapse to their tightest value.
+        # Non-dict schemas (e.g. boolean) cannot be intersected, so fall back to
+        # the conservative allOf wrapper.
+        if not isinstance(existing, dict) or not isinstance(incoming, dict):
+            return {"allOf": [copy.deepcopy(existing), copy.deepcopy(incoming)]}
+        return GtsEntityCastResult._flatten_property_schema(
+            {"allOf": [copy.deepcopy(existing), copy.deepcopy(incoming)]}
+        )
 
     @staticmethod
     def _flatten_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -487,6 +528,14 @@ class GtsEntityCastResult:
                     result["required"].extend(value)
                 elif key not in result:
                     result[key] = copy.deepcopy(value)
+                else:
+                    merged = GtsEntityCastResult._merge_constraint_value(
+                        key, result[key], value
+                    )
+                    if merged is None:
+                        result.setdefault("allOf", []).append({key: copy.deepcopy(value)})
+                    else:
+                        result[key] = merged
 
         properties = schema.get("properties")
         if isinstance(properties, dict):

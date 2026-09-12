@@ -143,6 +143,9 @@ def _lower_root_unevaluated_properties(schema: Any) -> Any | None:
             "allOf",
             "anyOf",
             "oneOf",
+            "if",
+            "then",
+            "else",
             "not",
             "dependentSchemas",
         )
