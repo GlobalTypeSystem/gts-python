@@ -15,6 +15,9 @@ dependencies = [
   "referencing>=0.30,<0.37",
   "jsonsubschema>=0.0.8,<0.1",
   "fastapi>=0.110,<1",
+  # Server models use pydantic v2 APIs (model_validator); declare it directly
+  # rather than relying on FastAPI to pull a compatible version transitively.
+  "pydantic>=2,<3",
   "uvicorn>=0.23,<1",
   "pyyaml>=6.0,<7",
   "regex==2025.11.3",
