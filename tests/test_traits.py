@@ -1,5 +1,6 @@
 """Tests for gts.traits (OP#13 schema traits validation)."""
 
+from gts._json_pointer import resolve
 from gts.traits import (
     build_effective_traits,
     build_effective_traits_schema,
@@ -40,6 +41,17 @@ class TestCollection:
             merged,
         )
         assert merged == {"b": 2, "a": 1}
+
+
+class TestJsonPointer:
+    def test_decodes_uri_fragment_tokens(self):
+        assert resolve({"a b": "value"}, "#/a%20b") == "value"
+
+    def test_rejects_negative_array_index(self):
+        assert resolve(["value"], "/-1", default="missing") == "missing"
+
+    def test_rejects_leading_zero_array_index(self):
+        assert resolve(["value"], "/01", default="missing") == "missing"
 
 
 class TestInlineLocalPointers:
