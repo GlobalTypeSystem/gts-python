@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from .gts import GTS_PREFIX, GTS_URI_PREFIX, GtsID
+from ._naming import GTS_PREFIX, has_scheme, strip_scheme
+from .gts import GtsID
 from .schema_cast import GtsEntityCastResult, SchemaCastError
 
 if TYPE_CHECKING:
@@ -258,8 +259,7 @@ class GtsEntity:
         def gts_id_matcher(node: Any, path: str) -> dict[str, str] | None:
             """Match GTS ID strings."""
             if isinstance(node, str):
-                val = node
-                val = val.removeprefix("gts://")
+                val = strip_scheme(node)
                 if GtsID.is_valid(val):
                     return {"id": val, "sourcePath": path or "root"}
             return None
@@ -274,9 +274,7 @@ class GtsEntity:
         def ref_matcher(node: Any, path: str) -> dict[str, str] | None:
             """Match $ref properties in dict nodes."""
             if isinstance(node, dict) and isinstance(node.get("$ref"), str):
-                val = node["$ref"]
-                # Issue #32: handle gts:// prefix
-                val = val.removeprefix("gts://")
+                val = strip_scheme(node["$ref"])
                 ref_path = f"{path}.$ref" if path else "$ref"
                 return {"id": val, "sourcePath": ref_path}
             return None
@@ -290,9 +288,8 @@ class GtsEntity:
             return None
         v = self.content.get(field)
         if isinstance(v, str) and v.strip():
-            # Issue #31, #32: Handle gts:// prefix in fields (e.g. $id)
-            v = v.removeprefix("gts://")
-            return v
+            # Normalize the ``gts://`` scheme at this document boundary.
+            return strip_scheme(v)
         return None
 
     def _schema_id_uses_plain_prefix(self) -> bool:
@@ -308,7 +305,7 @@ class GtsEntity:
         if not isinstance(raw, str):
             return False
         raw = raw.strip()
-        return raw.startswith(GTS_PREFIX) and not raw.startswith(GTS_URI_PREFIX)
+        return raw.startswith(GTS_PREFIX) and not has_scheme(raw)
 
     def _first_non_empty_field(self, fields: list[str]) -> tuple[str, str] | None:
         """Find first non-empty field value in order.

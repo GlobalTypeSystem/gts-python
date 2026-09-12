@@ -16,7 +16,10 @@ from typing import Any
 
 from jsonschema.validators import validator_for
 
-from .gts import GTS_URI_PREFIX, GtsID
+from ._json_pointer import MISSING
+from ._json_pointer import resolve as resolve_json_pointer
+from ._naming import GTS_PREFIX, strip_scheme
+from .gts import GtsID
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
@@ -103,23 +106,9 @@ class XGtsRefValidator:
         errors: list[XGtsRefValidationError] = []
 
         def resolve_local_ref(ref: str) -> Any | None:
-            if not ref.startswith("#/"):
+            if ref != "#" and not ref.startswith("#/"):
                 return None
-            current: Any = schema
-            for part in ref[2:].split("/"):
-                part = part.replace("~1", "/").replace("~0", "~")
-                if isinstance(current, dict):
-                    if part not in current:
-                        return None
-                    current = current[part]
-                elif isinstance(current, list):
-                    try:
-                        current = current[int(part)]
-                    except (ValueError, IndexError):
-                        return None
-                else:
-                    return None
-            return current
+            return resolve_json_pointer(schema, ref, default=None)
 
         def visit_instance(inst, sch, path, errs, refs=None):
             """Visit instance nodes and validate x-gts-ref constraints."""
@@ -346,7 +335,7 @@ class XGtsRefValidator:
             )
 
         # Case 1: Absolute GTS pattern
-        if ref_pattern.startswith("gts."):
+        if ref_pattern.startswith(GTS_PREFIX):
             return self._validate_gts_id_or_pattern(ref_pattern, field_path)
 
         # Case 2: Relative reference
@@ -385,7 +374,7 @@ class XGtsRefValidator:
         if "*" in pattern:
             # Wildcard pattern - validate prefix
             prefix = pattern.rstrip("*")
-            if not prefix.startswith("gts."):
+            if not prefix.startswith(GTS_PREFIX):
                 return XGtsRefValidationError(
                     field_path,
                     pattern,
@@ -459,41 +448,24 @@ class XGtsRefValidator:
 
         return None
 
-    def _normalize_gts_value(self, value: str) -> str:
-        """Strip gts:// URI prefix if present."""
-        if value.startswith(GTS_URI_PREFIX):
-            return value[len(GTS_URI_PREFIX) :]
-        return value
-
     def _resolve_pointer(self, schema: dict[str, Any], pointer: str) -> str | None:
         """
-        Resolve a JSON Pointer in the schema.
+        Resolve a JSON Pointer in the schema to a GTS identifier.
 
         Args:
             schema: The schema to search
             pointer: JSON Pointer (e.g., "/$id", "/properties/type")
 
         Returns:
-            The resolved value or None if not found
+            The resolved GTS identifier (bare form) or None if not found.
         """
-
-        path = pointer.lstrip("/")
-        if not path:
+        current = resolve_json_pointer(schema, pointer, default=MISSING)
+        if current is MISSING or current is None:
             return None
 
-        parts = path.split("/")
-        current = schema
-
-        for part in parts:
-            if not isinstance(current, dict):
-                return None
-            current = current.get(part)
-            if current is None:
-                return None
-
-        # If current is a string, return it (normalizing gts:// prefix)
+        # If current is a string, return it (normalized to the bare form).
         if isinstance(current, str):
-            return self._normalize_gts_value(current)
+            return strip_scheme(current)
 
         # If current is a dict with x-gts-ref, resolve it
         if isinstance(current, dict) and "x-gts-ref" in current:
@@ -501,6 +473,6 @@ class XGtsRefValidator:
             if isinstance(ref_value, str):
                 if ref_value.startswith("/"):
                     return self._resolve_pointer(schema, ref_value)
-                return self._normalize_gts_value(ref_value)
+                return strip_scheme(ref_value)
 
         return None

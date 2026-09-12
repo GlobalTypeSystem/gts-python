@@ -22,6 +22,7 @@ from typing import Any
 from jsonschema import Draft7Validator, FormatChecker
 
 from . import derivation
+from ._json_pointer import resolve as resolve_json_pointer
 from .schema_validation import validator_for
 from .x_gts_ref import XGtsRefValidator
 
@@ -120,7 +121,7 @@ def inline_local_pointers(fragment: Any, root: Any, depth: int = 0) -> Any:
     if isinstance(fragment, dict):
         ref = fragment.get("$ref")
         if isinstance(ref, str) and ref.startswith("#/"):
-            target = _resolve_json_pointer(root, ref[1:])
+            target = resolve_json_pointer(root, ref)
             if target is not None:
                 resolved = inline_local_pointers(target, root, depth + 1)
                 if len(fragment) > 1 and isinstance(resolved, dict):
@@ -134,24 +135,6 @@ def inline_local_pointers(fragment: Any, root: Any, depth: int = 0) -> Any:
     if isinstance(fragment, list):
         return [inline_local_pointers(item, root, depth + 1) for item in fragment]
     return copy.deepcopy(fragment)
-
-
-def _resolve_json_pointer(root: Any, pointer: str) -> Any:
-    # pointer begins with '/'
-    parts = [p for p in pointer.split("/") if p != ""]
-    current = root
-    for part in parts:
-        part = part.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, dict) and part in current:
-            current = current[part]
-        elif isinstance(current, list):
-            try:
-                current = current[int(part)]
-            except (ValueError, IndexError):
-                return None
-        else:
-            return None
-    return current
 
 
 # --- RFC 7396 merge --------------------------------------------------------

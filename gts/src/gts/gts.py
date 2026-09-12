@@ -5,8 +5,23 @@ import shlex
 import uuid
 from typing import Any
 
-GTS_PREFIX = "gts."
-GTS_URI_PREFIX = "gts://"
+from ._naming import (
+    GTS_PREFIX,
+    GTS_TYPE_MARKER,
+)
+from ._naming import (
+    has_scheme as _has_scheme,
+)
+from ._naming import (
+    is_type_ref as _is_type_ref,
+)
+from ._naming import (
+    strip_scheme as _strip_scheme,
+)
+from ._naming import (
+    with_scheme as _with_scheme,
+)
+
 GTS_NS = uuid.uuid5(uuid.NAMESPACE_URL, "gts")
 GTS_SEGMENT_TOKEN_REGEX = re.compile(r"^[a-z_][a-z0-9_]*$")
 UUID_REGEX = re.compile(
@@ -74,10 +89,10 @@ class GtsIdSegment:
         self._parse_segment_id(num, offset, segment)
 
     def _parse_segment_id(self, num: int, offset: int, segment: str):
-        if segment.count("~") > 0:
-            if segment.count("~") > 1:
+        if segment.count(GTS_TYPE_MARKER) > 0:
+            if segment.count(GTS_TYPE_MARKER) > 1:
                 raise GtsInvalidSegment(num, offset, segment, "Too many '~' characters")
-            if segment.endswith("~"):
+            if segment.endswith(GTS_TYPE_MARKER):
                 self.is_type = True
                 segment = segment[:-1]
             else:
@@ -191,8 +206,8 @@ class GtsID:
     def __init__(self, id: str):
         raw = id.strip()
 
-        # Strip gts:// URI prefix if present
-        raw = raw.removeprefix(GTS_URI_PREFIX)
+        # Normalize to the canonical bare form at this boundary.
+        raw = _strip_scheme(raw)
 
         # Validate it's lower case
         if raw != raw.lower():
@@ -268,7 +283,7 @@ class GtsID:
             s for s in self.gts_id_segments if not getattr(s, "_is_uuid_tail", False)
         ]
         if (
-            not self.id.endswith("~")
+            not self.id.endswith(GTS_TYPE_MARKER)
             and self.uuid_tail is None
             and len(non_uuid_segments) == 1
             and not any(seg.is_wildcard for seg in self.gts_id_segments)
@@ -279,6 +294,11 @@ class GtsID:
                 "Single-segment instance IDs are not allowed. "
                 "Instance IDs must be chained (e.g., type~instance).",
             )
+
+    @property
+    def uri(self) -> str:
+        """This identifier rendered in ``gts://`` URI form."""
+        return _with_scheme(self.id)
 
     @property
     def is_type(self) -> bool:
@@ -298,8 +318,7 @@ class GtsID:
 
     @classmethod
     def parse_type(cls, value: str) -> GtsID:
-        normalized = value.strip().removeprefix(GTS_URI_PREFIX)
-        if not normalized.endswith("~"):
+        if not _is_type_ref(value.strip()):
             raise GtsInvalidId(value, "must end with '~'")
         return cls(value)
 
@@ -316,10 +335,7 @@ class GtsID:
 
     @classmethod
     def is_valid(cls, s: str) -> bool:
-        # Strip gts:// URI prefix if present
-        normalized = s
-        normalized = normalized.removeprefix(GTS_URI_PREFIX)
-        if not normalized.startswith(GTS_PREFIX):
+        if not _strip_scheme(s).startswith(GTS_PREFIX):
             return False
         try:
             _ = cls(s)
@@ -470,3 +486,53 @@ class GtsWildcard(GtsID):
             super().__init__(p)
         except GtsInvalidId as e:
             raise GtsInvalidWildcard(pattern, str(e))
+
+
+class GtsRef:
+    """Classification of a JSON Schema ``$ref`` value used in GTS documents.
+
+    A ``$ref`` is exactly one of three kinds:
+
+    - :attr:`LOCAL` - a same-document JSON Pointer (``#`` or ``#/...``).
+    - :attr:`GTS` - a reference to a GTS type, either as a ``gts://`` URI or in
+      the bare ``gts.`` form.
+    - :attr:`OTHER` - anything else (e.g. an external URL); not resolvable as a
+      GTS reference.
+
+    Parsing normalizes the target once (see :attr:`target_id`) so callers never
+    strip the ``gts://`` scheme themselves. This is the single classifier for
+    ``$ref`` handling shared by the store, entity extraction and validation.
+    """
+
+    LOCAL = "local"
+    GTS = "gts"
+    OTHER = "other"
+
+    def __init__(
+        self, raw: str, kind: str, target_id: str, has_scheme: bool
+    ) -> None:
+        self.raw = raw
+        self.kind = kind
+        # Canonical bare target for non-local refs; empty for local pointers
+        # (use :attr:`is_local` to distinguish).
+        self.target_id = target_id
+        # Whether a GTS ref was written in explicit ``gts://`` URI form.
+        self.has_scheme = has_scheme
+
+    @classmethod
+    def parse(cls, raw: str) -> GtsRef:
+        if raw.startswith("#"):
+            return cls(raw, cls.LOCAL, "", False)
+        scheme = _has_scheme(raw)
+        target = _strip_scheme(raw)
+        if scheme or target.startswith(GTS_PREFIX):
+            return cls(raw, cls.GTS, target, scheme)
+        return cls(raw, cls.OTHER, target, False)
+
+    @property
+    def is_local(self) -> bool:
+        return self.kind == self.LOCAL
+
+    @property
+    def is_gts(self) -> bool:
+        return self.kind == self.GTS
