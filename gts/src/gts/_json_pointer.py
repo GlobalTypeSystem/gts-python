@@ -16,6 +16,7 @@ and ``x_gts_ref.py``.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import unquote
 
 # Sentinel distinguishing "pointer resolved to a real ``None``" from
 # "pointer could not be resolved". Callers that care should pass this (or their
@@ -40,7 +41,7 @@ def resolve(document: Any, pointer: str, default: Any = None) -> Any:
     Returns ``default`` if any reference token cannot be resolved (missing key,
     non-integer/out-of-range array index, or descending into a scalar).
     """
-    pointer = pointer.removeprefix("#")
+    pointer = unquote(pointer.removeprefix("#"))
     if pointer == "":
         return document
     if not pointer.startswith("/"):
@@ -54,9 +55,15 @@ def resolve(document: Any, pointer: str, default: Any = None) -> Any:
                 return default
             current = current[token]
         elif isinstance(current, list):
+            if not (
+                token.isascii()
+                and token.isdecimal()
+                and (token == "0" or not token.startswith("0"))
+            ):
+                return default
             try:
                 current = current[int(token)]
-            except (ValueError, IndexError):
+            except IndexError:
                 return default
         else:
             return default
