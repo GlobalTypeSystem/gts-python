@@ -7,9 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ._naming import GTS_PREFIX, GTS_URI_PREFIX, looks_like_gts
 from .entities import GtsEntity, GtsFile
 from .files_reader import DEFAULT_EXCLUDE_LIST
-from .gts import GTS_PREFIX, GTS_URI_PREFIX, GtsID
+from .gts import GtsID
 from .store import GtsStore
 
 _X_GTS_REF_KEYWORD = "x-gts-ref"
@@ -232,8 +233,7 @@ class GtsJsonValidator:
 
     @staticmethod
     def _looks_gts(v: str) -> bool:
-        normalized = v.removeprefix(GTS_URI_PREFIX)
-        return normalized.startswith(GTS_PREFIX) or v.startswith(GTS_URI_PREFIX)
+        return looks_like_gts(v)
 
     @staticmethod
     def _registry_key(entity: GtsEntity) -> str | None:

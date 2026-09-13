@@ -43,13 +43,15 @@ py-env: $(PY_ENV_STAMP)
 $(PY_ENV_PYTHON):
 	$(PYTHON_BOOTSTRAP) -m venv --clear $(PY_ENV_DIR)
 
-$(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml .gts-spec/tests/requirements.txt Makefile
+$(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml .gts-spec/tests/requirements.txt requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
 	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
 	$(PYTHON) -m pip install --upgrade pip
+	# Spec test-client deps, then httprunner (--no-deps: its own pins are
+	# incompatible with this venv), then local dev tooling + version overrides.
 	$(PYTHON) -m pip install -r .gts-spec/tests/requirements.txt
 	$(PYTHON) -m pip install --no-deps 'httprunner>=4,<5'
-	$(PYTHON) -m pip install ruff mypy
+	$(PYTHON) -m pip install -r requirements.txt
 	@touch $@
 
 # Install gts package into the venv (editable, for development)

@@ -74,6 +74,18 @@ class TestSanitize:
         assert result.get("type") == "string"
 
 
+class TestUnevaluatedPropertiesLowering:
+    def test_conditional_applicators_are_not_lowered(self):
+        from gts.compatibility import _lower_root_unevaluated_properties
+
+        assert (
+            _lower_root_unevaluated_properties(
+                {"unevaluatedProperties": False, "if": {"properties": {"a": True}}}
+            )
+            is None
+        )
+
+
 class TestCompatibilityVerdicts:
     def test_backward_compatible_widened_enum(self):
         # old accepted set must be subset of new
