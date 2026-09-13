@@ -47,6 +47,9 @@ class TestJsonPointer:
     def test_decodes_uri_fragment_tokens(self):
         assert resolve({"a b": "value"}, "#/a%20b") == "value"
 
+    def test_preserves_percent_encoding_in_plain_pointer(self):
+        assert resolve({"a%20b": "value"}, "/a%20b") == "value"
+
     def test_rejects_negative_array_index(self):
         assert resolve(["value"], "/-1", default="missing") == "missing"
 

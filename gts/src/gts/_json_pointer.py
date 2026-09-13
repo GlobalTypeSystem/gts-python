@@ -41,7 +41,8 @@ def resolve(document: Any, pointer: str, default: Any = None) -> Any:
     Returns ``default`` if any reference token cannot be resolved (missing key,
     non-integer/out-of-range array index, or descending into a scalar).
     """
-    pointer = unquote(pointer.removeprefix("#"))
+    if pointer.startswith("#"):
+        pointer = unquote(pointer[1:])
     if pointer == "":
         return document
     if not pointer.startswith("/"):
