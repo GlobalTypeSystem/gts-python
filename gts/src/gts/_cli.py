@@ -107,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("server", help="Start the GTS HTTP server")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--allow-entity-updates", action="store_true")
 
     s = sub.add_parser("openapi-spec", help="Generate OpenAPI specification")
     s.add_argument(
@@ -139,6 +140,7 @@ def main(argv: list[str] | None = None) -> None:
             config=args.config,
             verbose=args.verbose,
             exclude=exclude,
+            allow_entity_updates=getattr(args, "allow_entity_updates", False),
         )
 
         if args.op == "server":
