@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from gts._cli import main
+from gts._cli import build_parser, main
 
 
 @pytest.mark.parametrize(
@@ -59,6 +59,16 @@ def test_cli_operations_emit_json(arguments, capsys):
     main(arguments)
 
     assert json.loads(capsys.readouterr().out)
+
+
+def test_server_entity_updates_are_disabled_by_default():
+    parser = build_parser()
+
+    assert parser.parse_args(["server"]).allow_entity_updates is False
+    assert (
+        parser.parse_args(["server", "--allow-entity-updates"]).allow_entity_updates
+        is True
+    )
 
 
 def test_cli_writes_openapi_spec(tmp_path, capsys):

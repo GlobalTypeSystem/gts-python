@@ -47,6 +47,26 @@ class TestAddEntity:
         assert result.is_type_schema is True
         assert result.id == "gts.x.test._.foo.v1~"
 
+    def test_add_identical_schema_is_idempotent(self, ops):
+        assert ops.add_entity(SCHEMA).ok is True
+        assert ops.add_entity(dict(SCHEMA)).ok is True
+
+    def test_add_changed_schema_is_conflict(self, ops):
+        assert ops.add_entity(SCHEMA).ok is True
+        result = ops.add_entity({**SCHEMA, "properties": {"name": {"type": "integer"}}})
+
+        assert result.ok is False
+        assert result.conflict is True
+        assert ops.store.get("gts.x.test._.foo.v1~").content == SCHEMA
+
+    def test_allow_entity_updates_replaces_changed_schema(self):
+        ops = GtsOps(path=None, allow_entity_updates=True)
+        changed_schema = {**SCHEMA, "properties": {"name": {"type": "integer"}}}
+
+        assert ops.add_entity(SCHEMA).ok is True
+        assert ops.add_entity(changed_schema).ok is True
+        assert ops.store.get("gts.x.test._.foo.v1~").content == changed_schema
+
     def test_add_schema_missing_gts_id(self, ops):
         bad_schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -77,6 +97,26 @@ class TestAddEntity:
         result = ops.add_entity(INSTANCE)
         assert result.ok is True
         assert result.is_type_schema is False
+
+    def test_add_identical_instance_is_idempotent(self, ops):
+        assert ops.add_entity(INSTANCE).ok is True
+        assert ops.add_entity(dict(INSTANCE)).ok is True
+
+    def test_add_changed_instance_is_conflict(self, ops):
+        assert ops.add_entity(INSTANCE).ok is True
+        result = ops.add_entity({**INSTANCE, "name": "changed"})
+
+        assert result.ok is False
+        assert result.conflict is True
+        assert ops.store.get(INSTANCE["$id"]).content == INSTANCE
+
+    def test_allow_entity_updates_replaces_changed_instance(self):
+        ops = GtsOps(path=None, allow_entity_updates=True)
+        changed_instance = {**INSTANCE, "name": "changed"}
+
+        assert ops.add_entity(INSTANCE).ok is True
+        assert ops.add_entity(changed_instance).ok is True
+        assert ops.store.get(INSTANCE["$id"]).content == changed_instance
 
     def test_add_instance_validate_failure_restores_previous(self, ops):
         ops.add_entity(SCHEMA)
@@ -110,6 +150,13 @@ class TestAddSchemaLegacy:
         result = ops.add_schema("gts.x.test._.legacy.v1~", {"type": "object"})
         assert result.ok is True
         assert result.id == "gts.x.test._.legacy.v1~"
+
+    def test_add_schema_legacy_changed_content_is_conflict(self, ops):
+        assert ops.add_schema("gts.x.test._.legacy.v1~", {"type": "object"}).ok is True
+        result = ops.add_schema("gts.x.test._.legacy.v1~", {"type": "string"})
+
+        assert result.ok is False
+        assert result.conflict is True
 
     def test_add_schema_legacy_failure(self, ops):
         result = ops.add_schema("gts.x.test._.legacy.v1", {"type": "object"})

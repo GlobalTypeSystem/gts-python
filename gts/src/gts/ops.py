@@ -251,6 +251,7 @@ class GtsAddEntityResult:
     type_id: str | None = None
     is_type_schema: bool = False
     error: str = ""
+    conflict: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"ok": self.ok}
@@ -285,6 +286,7 @@ class GtsAddSchemaResult:
     ok: bool
     id: str = ""
     error: str = ""
+    conflict: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"ok": self.ok}
@@ -323,8 +325,10 @@ class GtsOps:
         config: str | None = None,
         verbose: int = 0,
         exclude: builtins.list[str] | None = None,
+        allow_entity_updates: bool = False,
     ) -> None:
         self.verbose = verbose
+        self.allow_entity_updates = allow_entity_updates
         self.cfg = self._load_config(config)
         self.path: str | list[str] | None = path
         self.exclude = exclude
@@ -408,6 +412,17 @@ class GtsOps:
 
         store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
         previous = self.store.get(store_key)
+        if (
+            previous
+            and not self.allow_entity_updates
+            and previous.content != entity.content
+        ):
+            return GtsAddEntityResult(
+                ok=False,
+                error=f"Entity '{store_key}' is already registered with different content",
+                is_type_schema=entity.is_schema,
+                conflict=True,
+            )
         self.store.register(entity)
 
         try:
@@ -447,6 +462,17 @@ class GtsOps:
 
     def add_schema(self, type_id: str, schema: dict[str, Any]) -> GtsAddSchemaResult:
         try:
+            previous = self.store.get(type_id)
+            if (
+                previous
+                and not self.allow_entity_updates
+                and previous.content != schema
+            ):
+                return GtsAddSchemaResult(
+                    ok=False,
+                    error=f"Entity '{type_id}' is already registered with different content",
+                    conflict=True,
+                )
             self.store.register_schema(type_id, schema)
             return GtsAddSchemaResult(ok=True, id=type_id)
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary

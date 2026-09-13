@@ -347,7 +347,7 @@ class GtsHttpServer:
         validate: bool = Query(False),
     ) -> JSONResponse:
         result = self.ops.add_entity(body, validate=validate)
-        status_code = 200 if result.ok else 422
+        status_code = 200 if result.ok else 409 if result.conflict else 422
         return JSONResponse(result.to_dict(), status_code=status_code)
 
     async def add_entities(
@@ -357,8 +357,9 @@ class GtsHttpServer:
         return JSONResponse(self.ops.add_entities(body).to_dict())
 
     async def add_schema(self, body: SchemaRegister) -> JSONResponse:
+        result = self.ops.add_schema(body.type_id, body.type_schema)
         return JSONResponse(
-            self.ops.add_schema(body.type_id, body.type_schema).to_dict()
+            result.to_dict(), status_code=409 if result.conflict else 200
         )
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
