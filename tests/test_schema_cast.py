@@ -69,7 +69,9 @@ class TestInferDirection:
         )
 
     def test_unknown_on_invalid_id(self):
-        assert GtsEntityCastResult._infer_direction("not-an-id", "also-not") == "unknown"
+        assert (
+            GtsEntityCastResult._infer_direction("not-an-id", "also-not") == "unknown"
+        )
 
     def test_combined_anonymous_id_uses_versioned_segment(self):
         # Regression: the appended UUID-tail segment has ver_minor=None; the
@@ -114,13 +116,33 @@ class TestFlattenSchema:
         assert set(flat["properties"].keys()) == {"a", "b"}
         assert set(flat["required"]) == {"a", "b"}
 
-    def test_additional_properties_top_level_overrides(self):
+    def test_additional_properties_intersects_allof_members(self):
         schema = {
             "allOf": [{"additionalProperties": False}],
             "additionalProperties": True,
         }
         flat = GtsEntityCastResult._flatten_schema(schema)
-        assert flat["additionalProperties"] is True
+        assert flat["additionalProperties"] is False
+
+    def test_intersected_additional_properties_removes_extra_values(self):
+        flat = GtsEntityCastResult._flatten_schema(
+            {"allOf": [{"additionalProperties": False}], "additionalProperties": True}
+        )
+        casted, _, removed, _ = GtsEntityCastResult._cast_instance_to_schema(
+            {"extra": "value"}, flat
+        )
+        assert casted == {}
+        assert removed == ["extra"]
+
+    def test_intersects_repeated_property_constraints(self):
+        schema = {
+            "allOf": [
+                {"properties": {"name": {"type": "string", "minLength": 1}}},
+                {"properties": {"name": {"type": "string", "minLength": 5}}},
+            ]
+        }
+        flat = GtsEntityCastResult._flatten_schema(schema)
+        assert flat["properties"]["name"]["minLength"] == 5
 
 
 class TestCastInstanceToSchema:
@@ -293,6 +315,22 @@ class TestCheckConstraintCompatibility:
         )
         assert errors
 
+    def test_allof_tightened_string_constraint_is_checked(self):
+        old = {"properties": {"name": {"type": "string", "minLength": 1}}}
+        new = {
+            "properties": {
+                "name": {
+                    "allOf": [
+                        {"type": "string", "minLength": 1},
+                        {"type": "string", "minLength": 5},
+                    ]
+                }
+            }
+        }
+        compatible, errors = GtsEntityCastResult._check_backward_compatibility(old, new)
+        assert compatible is False
+        assert any("minLength increased" in error for error in errors)
+
     def test_array_constraints_checked(self):
         errors = GtsEntityCastResult._check_constraint_compatibility(
             "p", {"type": "array", "minItems": 1}, {"type": "array", "minItems": 5}
@@ -357,8 +395,16 @@ class TestCheckSchemaCompatibility:
         assert any("removed enum constraint" in e for e in errors)
 
     def test_nested_object_errors_prefixed(self):
-        old = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "string"}}}}}
-        new = {"properties": {"a": {"type": "object", "properties": {"b": {"type": "integer"}}}}}
+        old = {
+            "properties": {
+                "a": {"type": "object", "properties": {"b": {"type": "string"}}}
+            }
+        }
+        new = {
+            "properties": {
+                "a": {"type": "object", "properties": {"b": {"type": "integer"}}}
+            }
+        }
         ok, errors = GtsEntityCastResult._check_backward_compatibility(old, new)
         assert not ok
         assert any("Property 'a':" in e for e in errors)
@@ -366,7 +412,9 @@ class TestCheckSchemaCompatibility:
     def test_fully_compatible_returns_true(self):
         old = {"properties": {"a": {"type": "string"}}}
         new = {"properties": {"a": {"type": "string"}}, "properties2": {}}
-        ok, errors = GtsEntityCastResult._check_backward_compatibility(old, {"properties": {"a": {"type": "string"}}})
+        ok, errors = GtsEntityCastResult._check_backward_compatibility(
+            old, {"properties": {"a": {"type": "string"}}}
+        )
         assert ok
         assert errors == []
 
@@ -491,6 +539,31 @@ class TestCastClassmethod:
         )
         assert result.is_fully_compatible is True
         assert result.casted_entity == {"a": "x"}
+
+    def test_cast_across_distinct_dialects_has_unknown_compatibility(self):
+        result = GtsEntityCastResult.cast(
+            "gts.x.test._.foo.v1.0~x.test._.bar.v1.0",
+            "gts.x.test._.foo.v1.1~",
+            {"status": "active"},
+            {
+                "$schema": "https://json-schema.org/draft-07/schema",
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+            },
+            {
+                "$schema": "http://json-schema.org/draft/2020-12/schema#",
+                "type": "object",
+                "properties": {"status": {"type": "string"}},
+            },
+        )
+
+        assert result.casted_entity == {"status": "active"}
+        assert result.to_dict()["backward_compatibility"] == "unknown"
+        assert result.to_dict()["forward_compatibility"] == "unknown"
+        assert result.to_dict()["full_compatibility"] == "unknown"
+        assert result.is_backward_compatible is None
+        assert result.is_forward_compatible is None
+        assert result.is_fully_compatible is None
 
     def test_cast_with_non_dict_instance_content_defaults_to_empty(self):
         result = GtsEntityCastResult.cast(

@@ -170,6 +170,22 @@ class TestValidateInstanceValue:
         )
         assert len(errors) == 1
 
+    def test_root_ref_traverses_nested_constraints(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "link": {"x-gts-ref": "gts.x.test.*"},
+                "child": {"$ref": "#"},
+            },
+        }
+
+        errors = XGtsRefValidator().validate_instance(
+            {"child": {"link": "gts.x.other.v1~"}}, schema
+        )
+
+        assert len(errors) == 1
+        assert errors[0].field_path == "child.link"
+
     def test_any_of_no_branch_matched(self):
         schema = {
             "anyOf": [

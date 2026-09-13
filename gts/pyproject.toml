@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gts"
-version = "0.13.1"
+version = "0.13.2"
 description = "Global Type System (GTS) helpers: identifiers, parsing, validation, and operations"
 readme = "README.md"
 authors = [{ name = "GTS Community" }]
@@ -15,8 +15,12 @@ dependencies = [
   "referencing>=0.30,<0.37",
   "jsonsubschema>=0.0.8,<0.1",
   "fastapi>=0.110,<1",
+  # Server models use pydantic v2 APIs (model_validator); declare it directly
+  # rather than relying on FastAPI to pull a compatible version transitively.
+  "pydantic>=2,<3",
   "uvicorn>=0.23,<1",
   "pyyaml>=6.0,<7",
+  "regex==2025.11.3",
   "eval_type_backport>=0.1,<0.3; python_version < '3.10'"
 ]
 

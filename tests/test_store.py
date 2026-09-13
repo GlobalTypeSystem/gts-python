@@ -1,7 +1,9 @@
 """Tests for GtsStore and GtsReader."""
 
-import pytest
 from typing import Iterator, Optional
+
+import pytest
+from jsonschema.exceptions import ValidationError
 
 from gts.store import (
     GtsStore,
@@ -297,6 +299,38 @@ class TestGtsStoreValidation:
         store.validate_instance(
             "gts.vendor.package.namespace.type.v1~vendor.package.namespace.inst.v1"
         )
+
+    def test_validate_instance_content_enforces_standard_formats(self):
+        store = GtsStore(MockGtsReader([]))
+        type_id = "gts.vendor.package.namespace.type.v1~"
+        store.register_schema(
+            type_id,
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "properties": {
+                    "uuid": {"type": "string", "format": "uuid"},
+                    "time": {"type": "string", "format": "time"},
+                },
+                "required": ["uuid", "time"],
+            },
+        )
+
+        # RFC 3339 "time" (draft-07) requires a timezone offset, so a valid
+        # value must carry one (e.g. the "Z" UTC designator).
+        store.validate_instance_content(
+            {"uuid": "550e8400-e29b-41d4-a716-446655440000", "time": "10:30:00Z"},
+            type_id,
+        )
+        with pytest.raises(ValidationError):
+            store.validate_instance_content(
+                {"uuid": "not-a-uuid", "time": "10:30:00Z"}, type_id
+            )
+        with pytest.raises(ValidationError):
+            store.validate_instance_content(
+                {"uuid": "550e8400-e29b-41d4-a716-446655440000", "time": "25:99:99Z"},
+                type_id,
+            )
 
     def test_validate_instance_not_found(self):
         """Test validating non-existent instance."""

@@ -3,9 +3,15 @@
 import pytest
 from typing import Iterator, Optional
 
-from gts.store import GtsStore, GtsReader, StoreGtsEntityNotFound, StoreGtsObjectNotFound
+from gts.store import (
+    GtsStore,
+    GtsReader,
+    StoreGtsEntityNotFound,
+    StoreGtsObjectNotFound,
+)
 from gts.entities import GtsEntity, DEFAULT_GTS_CONFIG
 from gts.gts import GtsID
+from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 
 
 class MockGtsReader(GtsReader):
@@ -45,6 +51,15 @@ def _schema_entity(gts_id: str, content_extra=None):
     if content_extra:
         content.update(content_extra)
     return GtsEntity(content=content, gts_id=GtsID(gts_id), is_schema=True)
+
+
+class TestBoundedPatternValidation:
+    def test_catastrophic_pattern_times_out(self):
+        validator = validator_for({"pattern": "(a+)+$"})({"pattern": "(a+)+$"})
+        errors = list(validator.iter_errors("a" * 30_000 + "!"))
+        assert len(errors) == 1
+        assert errors[0].message == "regular expression match timed out"
+        assert PATTERN_TIMEOUT_SECONDS == 1.0
 
 
 class TestRegisterEdgeCases:
@@ -149,9 +164,7 @@ class TestValidateSchemaXGtsRefs:
             store._validate_schema_x_gts_refs("gts.x.test._.foo.v1~")
 
     def test_invalid_x_gts_ref_raises(self):
-        schema = _schema_entity(
-            "gts.x.test._.foo.v1~", {"x-gts-ref": "notgts.*"}
-        )
+        schema = _schema_entity("gts.x.test._.foo.v1~", {"x-gts-ref": "notgts.*"})
         store = GtsStore(reader=None)
         store.register(schema)
         with pytest.raises(Exception, match="x-gts-ref validation failed"):
@@ -211,12 +224,8 @@ class TestResolveSchemaRefsAndInline:
         assert resolved == schema
 
     def test_cyclic_ref_left_unresolved(self):
-        a = _schema_entity(
-            "gts.x.test._.a.v1~", {"$ref": "gts://gts.x.test._.b.v1~"}
-        )
-        b = _schema_entity(
-            "gts.x.test._.b.v1~", {"$ref": "gts://gts.x.test._.a.v1~"}
-        )
+        a = _schema_entity("gts.x.test._.a.v1~", {"$ref": "gts://gts.x.test._.b.v1~"})
+        b = _schema_entity("gts.x.test._.b.v1~", {"$ref": "gts://gts.x.test._.a.v1~"})
         store = GtsStore(reader=None)
         store.register(a)
         store.register(b)
@@ -254,7 +263,12 @@ class TestCastAndCompatibility:
         old_schema = _schema_entity("gts.x.test._.foo.v1.0~")
         new_schema = _schema_entity(
             "gts.x.test._.foo.v1.5~",
-            {"properties": {"name": {"type": "string"}, "extra": {"type": "string", "default": "d"}}},
+            {
+                "properties": {
+                    "name": {"type": "string"},
+                    "extra": {"type": "string", "default": "d"},
+                }
+            },
         )
         instance = GtsEntity(
             content={
@@ -279,7 +293,9 @@ class TestCastAndCompatibility:
     def test_cast_from_missing_entity_raises(self):
         store, *_ = self._build_store()
         with pytest.raises(StoreGtsEntityNotFound):
-            store.cast("gts.x.test._.foo.v1.0~x.test._.missing.v1.0", "gts.x.test._.foo.v1.5~")
+            store.cast(
+                "gts.x.test._.foo.v1.0~x.test._.missing.v1.0", "gts.x.test._.foo.v1.5~"
+            )
 
     def test_cast_from_schema_raises(self):
         store, old_schema, new_schema, instance = self._build_store()
@@ -382,9 +398,7 @@ class TestQueryEdgeCases:
 
 class TestValidateSchemaFullFlow:
     def test_meta_schema_url_rejects_gts_id(self):
-        schema = _schema_entity(
-            "gts.x.test._.foo.v1~", {"$schema": "gts.x.other.v1~"}
-        )
+        schema = _schema_entity("gts.x.test._.foo.v1~", {"$schema": "gts.x.other.v1~"})
         store = GtsStore(reader=None)
         store.register(schema)
         with pytest.raises(ValueError, match="must be a standard JSON Schema URL"):
@@ -413,9 +427,7 @@ class TestValidateSchemaFullFlow:
             store.validate_schema("gts.x.test._.foo.v1~")
 
     def test_validate_instance_abstract_type_rejected(self):
-        schema = _schema_entity(
-            "gts.x.test._.foo.v1~", {"x-gts-abstract": True}
-        )
+        schema = _schema_entity("gts.x.test._.foo.v1~", {"x-gts-abstract": True})
         instance = GtsEntity(
             content={
                 "$id": "gts.x.test._.foo.v1~x.test._.inst.v1",
