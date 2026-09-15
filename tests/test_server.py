@@ -75,6 +75,23 @@ class TestHandlers:
         resp = run(server.add_entity(body={"no": "id"}, validate=False))
         assert resp.status_code == 422
 
+    def test_add_changed_entity_conflict(self, server):
+        assert run(server.add_entity(body=SCHEMA, validate=False)).status_code == 200
+        changed_schema = {**SCHEMA, "properties": {"name": {"type": "integer"}}}
+        resp = run(server.add_entity(body=changed_schema, validate=False))
+
+        assert resp.status_code == 409
+
+    def test_allow_entity_updates(self):
+        server = GtsHttpServer(ops=GtsOps(path=None, allow_entity_updates=True))
+        changed_schema = {**SCHEMA, "properties": {"name": {"type": "integer"}}}
+
+        assert run(server.add_entity(body=SCHEMA, validate=False)).status_code == 200
+        assert (
+            run(server.add_entity(body=changed_schema, validate=False)).status_code
+            == 200
+        )
+
     def test_add_entities(self, server):
         resp = run(server.add_entities(body=[SCHEMA, INSTANCE]))
         assert resp.status_code == 200
@@ -85,6 +102,19 @@ class TestHandlers:
         body = SchemaRegister(type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"})
         resp = run(server.add_schema(body))
         assert resp.status_code == 200
+
+    def test_add_schema_changed_content_conflict(self, server):
+        from gts._server import SchemaRegister
+
+        initial = SchemaRegister(
+            type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"}
+        )
+        changed = SchemaRegister(
+            type_id="gts.x.test._.bar.v1~", type_schema={"type": "string"}
+        )
+
+        assert run(server.add_schema(initial)).status_code == 200
+        assert run(server.add_schema(changed)).status_code == 409
 
     def test_validate_id(self, server):
         result = run(server.validate_id(id="gts.x.test._.foo.v1~"))
