@@ -108,6 +108,33 @@ class TestValidateSchemaRefs:
                 {"allOf": [{"$ref": "http://example.com/schema"}]}
             )
 
+    def test_registered_gts_ref_target_resolves(self):
+        target = _schema_entity("gts.x.test._.target.v1~")
+        store = GtsStore(MockGtsReader([target]))
+        store._validate_schema_ref_targets(
+            {"allOf": [{"$ref": "gts://gts.x.test._.target.v1~"}]}
+        )
+
+    def test_missing_gts_ref_target_raises(self):
+        store = GtsStore(reader=None)
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {"allOf": [{"$ref": "gts://gts.x.test._.missing.v1~"}]}
+            )
+
+    def test_missing_derived_gts_ref_target_raises(self):
+        target = _schema_entity("gts.x.test._.target.v1~")
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {
+                    "$ref": (
+                        "gts://gts.x.test._.target.v1~"
+                        "x.test._.missing.v1~"
+                    )
+                }
+            )
+
 
 class TestValidateGtsKeywords:
     def test_final_must_be_bool(self):

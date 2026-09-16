@@ -295,6 +295,27 @@ class GtsStore:
                 nested_path = f"{path}[{idx}]"
                 GtsStore._validate_schema_refs(item, nested_path)
 
+    def _validate_schema_ref_targets(self, schema: Any, path: str = "") -> None:
+        if isinstance(schema, dict):
+            ref_uri = schema.get("$ref")
+            if isinstance(ref_uri, str):
+                ref = GtsRef.parse(ref_uri)
+                if not ref.is_local and ref.is_gts and ref.has_scheme:
+                    current_path = f"{path}.$ref" if path else "$ref"
+                    try:
+                        self.get_schema_content(ref.target_id)
+                    except KeyError as error:
+                        raise ValueError(
+                            f"Unresolvable $ref at '{current_path}': '{ref_uri}'"
+                        ) from error
+            for key, value in schema.items():
+                if key != "$ref":
+                    nested_path = f"{path}.{key}" if path else key
+                    self._validate_schema_ref_targets(value, nested_path)
+        elif isinstance(schema, list):
+            for index, item in enumerate(schema):
+                self._validate_schema_ref_targets(item, f"{path}[{index}]")
+
     def _validate_schema_x_gts_refs(self, gts_id: str) -> None:
         """
         Validate a schema's x-gts-ref fields.
@@ -671,6 +692,7 @@ class GtsStore:
 
         logger.info(f"Validating schema {schema_id.id}")
         self._validate_schema_refs(schema_content, "")
+        self._validate_schema_ref_targets(schema_content)
         self._validate_schema_x_gts_refs_content(schema_id.id, schema_content)
         self._validate_gts_keywords(schema_content)
         self._validate_schema_chain(schema_id.id, schema_content)
