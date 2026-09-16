@@ -268,6 +268,49 @@ class XGtsRefValidator:
         visit_schema(schema, schema_path)
         return errors
 
+    def validate_schema_ref_existence(
+        self, schema: Any, schema_path: str = ""
+    ) -> list[XGtsRefValidationError]:
+        if self.store is None or not self.enforce_existence:
+            return []
+
+        store = self.store
+        errors: list[XGtsRefValidationError] = []
+
+        def visit_schema(sch: Any, path: str) -> None:
+            if not isinstance(sch, dict):
+                return
+
+            ref_pattern = sch.get("x-gts-ref")
+            if (
+                isinstance(ref_pattern, str)
+                and ref_pattern.startswith(GTS_PREFIX)
+                and "*" not in ref_pattern
+                and store.get(ref_pattern) is None
+            ):
+                ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
+                errors.append(
+                    XGtsRefValidationError(
+                        ref_path,
+                        ref_pattern,
+                        ref_pattern,
+                        f"x-gts-ref constraint type '{ref_pattern}' is not registered",
+                    )
+                )
+
+            for key, value in sch.items():
+                if key == "x-gts-ref":
+                    continue
+                nested_path = f"{path}/{key}" if path else key
+                if isinstance(value, dict):
+                    visit_schema(value, nested_path)
+                elif isinstance(value, list):
+                    for index, item in enumerate(value):
+                        visit_schema(item, f"{nested_path}[{index}]")
+
+        visit_schema(schema, schema_path)
+        return errors
+
     def _validate_ref_value(
         self, value: str, ref_pattern: str, field_path: str, schema: dict[str, Any]
     ) -> XGtsRefValidationError | None:

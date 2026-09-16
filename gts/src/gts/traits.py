@@ -324,28 +324,14 @@ def _validate_trait_schema_compatibility(
     return errors
 
 
-def _strip_required(schema: Any, depth: int = 0) -> Any:
-    if depth >= MAX_RECURSION_DEPTH or not isinstance(schema, dict):
-        return schema
-    out = dict(schema)
-    out.pop("required", None)
-    all_of = out.get("allOf")
-    if isinstance(all_of, list):
-        out["allOf"] = [_strip_required(i, depth + 1) for i in all_of]
-    return out
-
-
 def _validate_traits_against_schema(
     trait_schema: Any, effective_traits: Any, check_unresolved: bool
 ) -> list[str]:
     errors: list[str] = []
-    validation_schema = (
-        trait_schema if check_unresolved else _strip_required(trait_schema)
-    )
 
     try:
-        cls = validator_for(validation_schema)
-        validator = cls(validation_schema, format_checker=_FORMAT_CHECKER)
+        cls = validator_for(trait_schema)
+        validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
     except Exception as e:  # noqa: BLE001 - surfaced as validation error message
@@ -383,10 +369,16 @@ def _validate_trait_values(
     check_unresolved: bool,
     reference_store: Any | None,
 ) -> list[str]:
-    errors = _validate_traits_against_schema(
-        effective_traits_schema, effective_traits, check_unresolved
+    errors = (
+        _validate_traits_against_schema(
+            effective_traits_schema, effective_traits, check_unresolved
+        )
+        if check_unresolved
+        else []
     )
     xref = XGtsRefValidator(store=reference_store)
+    for err in xref.validate_schema_ref_existence(effective_traits_schema):
+        errors.append(f"trait x-gts-ref: {err.reason}")
     for err in xref.validate_instance(effective_traits, effective_traits_schema, ""):
         errors.append(f"trait x-gts-ref: {err.reason}")
     return errors

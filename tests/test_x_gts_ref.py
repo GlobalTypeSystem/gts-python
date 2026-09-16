@@ -80,6 +80,38 @@ class TestValidateSchema:
         assert "allOf[0]/x-gts-ref" in errors[0].field_path
 
 
+class TestValidateSchemaRefExistence:
+    def test_missing_concrete_constraint_type_fails(self):
+        class FakeStore:
+            def get(self, value):
+                return None
+
+        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+            {"properties": {"ref": {"x-gts-ref": "gts.x.test._.foo.v1~"}}}
+        )
+
+        assert len(errors) == 1
+        assert errors[0].field_path == "properties/ref/x-gts-ref"
+        assert "constraint type 'gts.x.test._.foo.v1~' is not registered" in errors[0].reason
+
+    def test_registered_and_wildcard_constraints_pass(self):
+        class FakeStore:
+            def get(self, value):
+                return object() if value == "gts.x.test._.foo.v1~" else None
+
+        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+            {
+                "allOf": [
+                    {"x-gts-ref": "gts.x.test._.foo.v1~"},
+                    {"x-gts-ref": "gts.x.test.*"},
+                    {"x-gts-ref": "/properties/ref"},
+                ]
+            }
+        )
+
+        assert errors == []
+
+
 class TestValidateInstanceValue:
     def test_non_string_instance_value_error(self):
         error = XGtsRefValidator()._validate_ref_value(123, "gts.*", "ref", {})

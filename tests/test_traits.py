@@ -221,6 +221,30 @@ class TestBuildEffectiveTraits:
         errors = effective.validate(check_unresolved=False)
         assert errors == []
 
+    def test_abstract_skips_standard_trait_validation(self):
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+        }
+        effective = build_effective_traits([schema], {"a": 5}, None)
+        assert effective.validate(check_unresolved=False) == []
+
+    def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
+        class FakeStore:
+            def get(self, value):
+                return None
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "x-gts-ref": "gts.x.test._.foo.v1~"}
+            },
+        }
+        errors = build_effective_traits([schema], {}, None).validate(
+            check_unresolved=False, reference_store=FakeStore()
+        )
+        assert any("constraint type 'gts.x.test._.foo.v1~' is not registered" in e for e in errors)
+
     def test_incompatible_trait_schema_chain_flagged(self):
         # Second schema narrows type incompatibly with the ancestor.
         effective = build_effective_traits(
