@@ -386,7 +386,7 @@ def _validate_trait_values(
     errors = _validate_traits_against_schema(
         effective_traits_schema, effective_traits, check_unresolved
     )
-    xref = XGtsRefValidator(store=reference_store, require_registered_target=True)
+    xref = XGtsRefValidator(store=reference_store)
     for err in xref.validate_instance(effective_traits, effective_traits_schema, ""):
         errors.append(f"trait x-gts-ref: {err.reason}")
     return errors

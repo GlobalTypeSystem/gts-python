@@ -77,17 +77,20 @@ class XGtsRefValidationError(Exception):
 class XGtsRefValidator:
     """Validator for x-gts-ref constraints in GTS schemas."""
 
-    def __init__(
-        self, store: Any | None = None, require_registered_target: bool = False
-    ):
+    def __init__(self, store: Any | None = None, enforce_existence: bool = True):
         """
         Initialize validator.
 
         Args:
-            store: Optional GtsStore for resolving entity references
+            store: Optional GtsStore for resolving entity references.
+            enforce_existence: When True (default) and a ``store`` is provided,
+                an x-gts-ref value must resolve to a registered entity or
+                validation fails. Set to False to validate only that the value
+                is a well-formed GTS id matching the constraint pattern, without
+                requiring the referenced entity to exist in the registry.
         """
         self.store = store
-        self.require_registered_target = require_registered_target
+        self.enforce_existence = enforce_existence
 
     def validate_instance(
         self, instance: dict[str, Any], schema: dict[str, Any], instance_path: str = ""
@@ -433,10 +436,11 @@ class XGtsRefValidator:
                 f"Value '{value}' does not match pattern '{pattern}'",
             )
 
-        # Optionally check if entity exists in store
-        if self.store and (
-            not self.require_registered_target or self.store.get(pattern)
-        ):
+        # Referenced value must resolve to a registered entity when a store is
+        # available and existence enforcement is enabled. Existence is enforced
+        # uniformly for all constraint forms (including the bare "gts.*"
+        # wildcard).
+        if self.store and self.enforce_existence:
             entity = self.store.get(value)
             if not entity:
                 return XGtsRefValidationError(
