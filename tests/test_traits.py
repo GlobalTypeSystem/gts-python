@@ -230,6 +230,17 @@ class TestBuildEffectiveTraits:
         errors = effective.validate(check_unresolved=False)
         assert any("is not of type 'string'" in error for error in errors)
 
+    def test_abstract_preserves_required_in_const_value(self):
+        schema = {
+            "type": "object",
+            "properties": {"config": {"const": {"required": ["a"]}}},
+            "required": ["missing"],
+        }
+        effective = build_effective_traits(
+            [schema], {"config": {"required": ["a"]}}, None
+        )
+        assert effective.validate(check_unresolved=False) == []
+
     def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
         class FakeStore:
             def get(self, value):

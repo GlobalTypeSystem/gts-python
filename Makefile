@@ -118,7 +118,7 @@ coverage: install
 PORT ?= 8000
 
 gts-server: install
-	$(PYTHON) -m gts server --host 0.0.0.0 --port $(PORT)
+	$(PYTHON) -m gts server --host 127.0.0.1 --port $(PORT)
 
 # Run end-to-end tests against gts-spec
 e2e: install

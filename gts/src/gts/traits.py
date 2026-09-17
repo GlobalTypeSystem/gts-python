@@ -19,6 +19,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from jsonschema import validators
+
 from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
@@ -277,16 +279,8 @@ def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
 
 
 # --- validation ------------------------------------------------------------
-def _without_required(schema: Any) -> Any:
-    if isinstance(schema, dict):
-        return {
-            key: _without_required(value)
-            for key, value in schema.items()
-            if key != "required"
-        }
-    if isinstance(schema, list):
-        return [_without_required(value) for value in schema]
-    return copy.deepcopy(schema)
+def _ignore_required(*_args: Any) -> tuple[()]:
+    return ()
 
 
 def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
@@ -346,6 +340,8 @@ def _validate_traits_against_schema(
 
     try:
         cls = validator_for(trait_schema)
+        if not check_unresolved:
+            cls = validators.extend(cls, {"required": _ignore_required})
         validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
@@ -384,13 +380,8 @@ def _validate_trait_values(
     check_unresolved: bool,
     reference_store: Any | None,
 ) -> list[str]:
-    schema_for_values = (
-        effective_traits_schema
-        if check_unresolved
-        else _without_required(effective_traits_schema)
-    )
     errors = _validate_traits_against_schema(
-        schema_for_values, effective_traits, check_unresolved
+        effective_traits_schema, effective_traits, check_unresolved
     )
     xref = XGtsRefValidator(store=reference_store)
     for err in xref.validate_schema_ref_existence(effective_traits_schema):
