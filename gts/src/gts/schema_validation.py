@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+import copy
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import regex
@@ -8,6 +9,89 @@ from jsonschema import Draft7Validator, FormatChecker, ValidationError, validato
 from jsonschema.validators import validator_for as jsonschema_validator_for
 
 PATTERN_TIMEOUT_SECONDS = 1.0
+
+_SCHEMA_MAP_KEYWORDS = {
+    "$defs",
+    "definitions",
+    "dependentSchemas",
+    "patternProperties",
+    "properties",
+}
+_SCHEMA_ARRAY_KEYWORDS = {"allOf", "anyOf", "oneOf", "prefixItems"}
+_SCHEMA_SINGLE_KEYWORDS = {
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+    "x-gts-traits-schema",
+}
+
+
+def iter_schema_nodes(
+    schema: Any, path: str = ""
+) -> Iterator[tuple[dict[str, Any], str]]:
+    if not isinstance(schema, dict):
+        return
+    yield schema, path
+    for keyword, value in schema.items():
+        keyword_path = f"{path}/{keyword}" if path else keyword
+        if keyword in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            for name, child in value.items():
+                yield from iter_schema_nodes(child, f"{keyword_path}/{name}")
+        elif keyword in _SCHEMA_ARRAY_KEYWORDS and isinstance(value, list):
+            for index, child in enumerate(value):
+                yield from iter_schema_nodes(child, f"{keyword_path}[{index}]")
+        elif keyword in _SCHEMA_SINGLE_KEYWORDS:
+            yield from iter_schema_nodes(value, keyword_path)
+        elif keyword == "items":
+            if isinstance(value, list):
+                for index, child in enumerate(value):
+                    yield from iter_schema_nodes(child, f"{keyword_path}[{index}]")
+            else:
+                yield from iter_schema_nodes(value, keyword_path)
+        elif keyword == "dependencies" and isinstance(value, dict):
+            for name, child in value.items():
+                if isinstance(child, (dict, bool)):
+                    yield from iter_schema_nodes(child, f"{keyword_path}/{name}")
+
+
+def map_schema_nodes(schema: Any, transform: Callable[[Any], Any]) -> Any:
+    if not isinstance(schema, dict):
+        return copy.deepcopy(schema)
+    mapped = copy.deepcopy(schema)
+    for keyword, value in schema.items():
+        if keyword in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            mapped[keyword] = {
+                name: map_schema_nodes(child, transform)
+                for name, child in value.items()
+            }
+        elif keyword in _SCHEMA_ARRAY_KEYWORDS and isinstance(value, list):
+            mapped[keyword] = [map_schema_nodes(child, transform) for child in value]
+        elif keyword in _SCHEMA_SINGLE_KEYWORDS:
+            mapped[keyword] = map_schema_nodes(value, transform)
+        elif keyword == "items":
+            if isinstance(value, list):
+                mapped[keyword] = [
+                    map_schema_nodes(child, transform) for child in value
+                ]
+            else:
+                mapped[keyword] = map_schema_nodes(value, transform)
+        elif keyword == "dependencies" and isinstance(value, dict):
+            mapped[keyword] = {
+                name: map_schema_nodes(child, transform)
+                if isinstance(child, (dict, bool))
+                else copy.deepcopy(child)
+                for name, child in value.items()
+            }
+    return transform(mapped)
+
 
 # Shared format checker for instance/trait validation.
 #

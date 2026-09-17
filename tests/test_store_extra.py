@@ -156,6 +156,30 @@ class TestValidateSchemaRefs:
             )
 
 
+class TestSchemaDependencies:
+    def test_ignores_x_gts_ref_in_annotation_data(self):
+        store = GtsStore(reader=None)
+        assert list(
+            store._schema_dependencies(
+                {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
+            )
+        ) == []
+
+    def test_finds_constraint_under_property_named_x_gts_ref(self):
+        store = GtsStore(reader=None)
+        assert list(
+            store._schema_dependencies(
+                {
+                    "properties": {
+                        "x-gts-ref": {
+                            "x-gts-ref": "gts.x.test._.missing.v1~"
+                        }
+                    }
+                }
+            )
+        ) == [("gts.x.test._.missing.v1~", True)]
+
+
 class TestValidateGtsKeywords:
     def test_final_must_be_bool(self):
         with pytest.raises(ValueError, match="x-gts-final must be a boolean"):
@@ -180,6 +204,11 @@ class TestValidateGtsKeywords:
     def test_valid_top_level_keywords_pass(self):
         GtsStore._validate_gts_keywords({"x-gts-final": True})
         GtsStore._validate_gts_keywords({"x-gts-abstract": True})
+
+    def test_extension_shaped_annotation_data_is_ignored(self):
+        GtsStore._validate_gts_keywords(
+            {"const": {"x-gts-final": True, "x-gts-unknown": True}}
+        )
 
     def test_content_is_abstract_and_final(self):
         assert GtsStore._content_is_abstract({"x-gts-abstract": True}) is True

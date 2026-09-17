@@ -15,7 +15,7 @@ from ._naming import looks_like_gts, strip_scheme, with_scheme
 from .entities import GtsEntity
 from .gts import GtsID, GtsRef, GtsWildcard
 from .schema_cast import GtsEntityCastResult
-from .schema_validation import FORMAT_CHECKER, validator_for
+from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
@@ -372,15 +372,6 @@ class GtsStore:
         }
         supported_keywords = top_level_keywords | {"x-gts-ref"}
 
-        def _contains_key_recursive(value: Any, key: str) -> bool:
-            if isinstance(value, dict):
-                if key in value:
-                    return True
-                return any(_contains_key_recursive(v, key) for v in value.values())
-            elif isinstance(value, list):
-                return any(_contains_key_recursive(v, key) for v in value)
-            return False
-
         # Validate x-gts-final
         final_val = content.get("x-gts-final")
         if final_val is not None and not isinstance(final_val, bool):
@@ -401,26 +392,12 @@ class GtsStore:
                 "schema cannot declare both x-gts-final and x-gts-abstract as true"
             )
 
-        def _validate_extensions(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, nested_value in value.items():
-                    if key.startswith("x-gts-") and key not in supported_keywords:
-                        raise ValueError(f"Unsupported GTS extension keyword: {key}")
-                    _validate_extensions(nested_value)
-            elif isinstance(value, list):
-                for item in value:
-                    _validate_extensions(item)
-
-        _validate_extensions(content)
-
-        # Check that x-gts-final/x-gts-abstract/x-gts-traits/x-gts-traits-schema
-        # appear only at the top level
-        for key, value in content.items():
-            if key in top_level_keywords:
-                continue
-            for kw in top_level_keywords:
-                if _contains_key_recursive(value, kw):
-                    raise ValueError(f"{kw} must be at the schema top level")
+        for subschema, path in iter_schema_nodes(content):
+            for key in subschema:
+                if key.startswith("x-gts-") and key not in supported_keywords:
+                    raise ValueError(f"Unsupported GTS extension keyword: {key}")
+                if path and key in top_level_keywords:
+                    raise ValueError(f"{key} must be at the schema top level")
 
     @staticmethod
     def _content_is_abstract(content: dict[str, Any]) -> bool:
@@ -804,28 +781,20 @@ class GtsStore:
         validated.add(key)
 
     def _schema_dependencies(self, schema: Any) -> Iterator[tuple[str, bool]]:
-        if isinstance(schema, dict):
-            ref_uri = schema.get("$ref")
+        for subschema, _path in iter_schema_nodes(schema):
+            ref_uri = subschema.get("$ref")
             if isinstance(ref_uri, str):
                 ref = GtsRef.parse(ref_uri)
                 if not ref.is_local and ref.is_gts and ref.has_scheme:
                     yield ref.target_id, True
 
-            x_gts_ref = schema.get("x-gts-ref")
+            x_gts_ref = subschema.get("x-gts-ref")
             if (
                 isinstance(x_gts_ref, str)
                 and x_gts_ref.startswith("gts.")
                 and "*" not in x_gts_ref
             ):
                 yield x_gts_ref, True
-
-            for key, value in schema.items():
-                if key in {"$ref", "x-gts-ref"}:
-                    continue
-                yield from self._schema_dependencies(value)
-        elif isinstance(schema, list):
-            for value in schema:
-                yield from self._schema_dependencies(value)
 
     def _validate_entity_transitive(
         self, gts_id: str, visiting: set[str], validated: set[str]

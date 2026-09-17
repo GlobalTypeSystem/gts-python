@@ -20,15 +20,14 @@ from ._json_pointer import MISSING
 from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import GTS_PREFIX, strip_scheme
 from .gts import GtsID
+from .schema_validation import iter_schema_nodes, map_schema_nodes
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
-    if isinstance(schema, dict):
-        stripped = {
-            key: _without_x_gts_ref(value)
-            for key, value in schema.items()
-            if key != "x-gts-ref"
-        }
+    def strip(node: Any) -> Any:
+        if not isinstance(node, dict):
+            return node
+        stripped = {key: value for key, value in node.items() if key != "x-gts-ref"}
         for keyword in ("oneOf", "anyOf", "allOf"):
             branches = stripped.get(keyword)
             if (
@@ -38,9 +37,8 @@ def _without_x_gts_ref(schema: Any) -> Any:
             ):
                 stripped.pop(keyword, None)
         return stripped
-    if isinstance(schema, list):
-        return [_without_x_gts_ref(value) for value in schema]
-    return schema
+
+    return map_schema_nodes(schema, strip)
 
 
 def _is_x_gts_ref_only_combinator(branches: list[Any]) -> bool:
@@ -240,33 +238,14 @@ class XGtsRefValidator:
             root_schema = schema
 
         errors = []
-
-        def visit_schema(sch, path):
-            """Recursively visit schema nodes."""
-            if not isinstance(sch, dict):
-                return
-
-            # Check for x-gts-ref field
-            if "x-gts-ref" in sch:
-                ref_value = sch["x-gts-ref"]
-                ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
-                error = self._validate_ref_pattern(ref_value, ref_path, root_schema)
-                if error:
-                    errors.append(error)
-
-            # Recurse into nested structures
-            for key, value in sch.items():
-                if key == "x-gts-ref":
-                    continue
-                nested_path = f"{path}/{key}" if path else key
-                if isinstance(value, dict):
-                    visit_schema(value, nested_path)
-                elif isinstance(value, list):
-                    for idx, item in enumerate(value):
-                        if isinstance(item, dict):
-                            visit_schema(item, f"{nested_path}[{idx}]")
-
-        visit_schema(schema, schema_path)
+        for subschema, path in iter_schema_nodes(schema, schema_path):
+            if "x-gts-ref" not in subschema:
+                continue
+            ref_value = subschema["x-gts-ref"]
+            ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
+            error = self._validate_ref_pattern(ref_value, ref_path, root_schema)
+            if error:
+                errors.append(error)
         return errors
 
     def validate_schema_ref_existence(
@@ -277,39 +256,24 @@ class XGtsRefValidator:
 
         store = self.store
         errors: list[XGtsRefValidationError] = []
-
-        def visit_schema(sch: Any, path: str) -> None:
-            if not isinstance(sch, dict):
-                return
-
-            ref_pattern = sch.get("x-gts-ref")
+        for subschema, path in iter_schema_nodes(schema, schema_path):
+            ref_pattern = subschema.get("x-gts-ref")
             if (
-                isinstance(ref_pattern, str)
-                and ref_pattern.startswith(GTS_PREFIX)
-                and "*" not in ref_pattern
-                and store.get(ref_pattern) is None
+                not isinstance(ref_pattern, str)
+                or not ref_pattern.startswith(GTS_PREFIX)
+                or "*" in ref_pattern
+                or store.get(ref_pattern) is not None
             ):
-                ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
-                errors.append(
-                    XGtsRefValidationError(
-                        ref_path,
-                        ref_pattern,
-                        ref_pattern,
-                        f"x-gts-ref constraint type '{ref_pattern}' is not registered",
-                    )
+                continue
+            ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
+            errors.append(
+                XGtsRefValidationError(
+                    ref_path,
+                    ref_pattern,
+                    ref_pattern,
+                    f"x-gts-ref constraint type '{ref_pattern}' is not registered",
                 )
-
-            for key, value in sch.items():
-                if key == "x-gts-ref":
-                    continue
-                nested_path = f"{path}/{key}" if path else key
-                if isinstance(value, dict):
-                    visit_schema(value, nested_path)
-                elif isinstance(value, list):
-                    for index, item in enumerate(value):
-                        visit_schema(item, f"{nested_path}[{index}]")
-
-        visit_schema(schema, schema_path)
+            )
         return errors
 
     def _validate_ref_value(

@@ -79,6 +79,27 @@ class TestValidateSchema:
         assert len(errors) == 1
         assert "allOf[0]/x-gts-ref" in errors[0].field_path
 
+    def test_ignores_x_gts_ref_in_annotation_data(self):
+        schema = {
+            "properties": {
+                "payload": {
+                    "const": {"x-gts-ref": "gts.x.test._.missing.v1~"},
+                    "default": {"x-gts-ref": "not-a-gts-id"},
+                }
+            }
+        }
+        assert XGtsRefValidator().validate_schema(schema) == []
+
+    def test_property_named_x_gts_ref_is_not_a_keyword(self):
+        schema = {
+            "properties": {
+                "x-gts-ref": {"x-gts-ref": "notgts.*"},
+            }
+        }
+        errors = XGtsRefValidator().validate_schema(schema)
+        assert len(errors) == 1
+        assert errors[0].field_path == "properties/x-gts-ref/x-gts-ref"
+
 
 class TestValidateSchemaRefExistence:
     def test_missing_concrete_constraint_type_fails(self):
@@ -109,6 +130,16 @@ class TestValidateSchemaRefExistence:
             }
         )
 
+        assert errors == []
+
+    def test_annotation_data_does_not_require_constraint_type(self):
+        class FakeStore:
+            def get(self, value):
+                return None
+
+        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+            {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
+        )
         assert errors == []
 
 
