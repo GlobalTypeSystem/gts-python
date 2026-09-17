@@ -241,6 +241,20 @@ class TestBuildEffectiveTraits:
         )
         assert effective.validate(check_unresolved=False) == []
 
+    def test_abstract_skips_required_in_nested_dialect_schema(self):
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "required": ["missing"],
+                }
+            ],
+        }
+        effective = build_effective_traits([schema], {}, None)
+        assert effective.validate(check_unresolved=False) == []
+
     def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
         class FakeStore:
             def get(self, value):

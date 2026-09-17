@@ -19,12 +19,10 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from jsonschema import validators
-
 from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
-from .schema_validation import validator_for
+from .schema_validation import map_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator
 
 X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
@@ -279,10 +277,6 @@ def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
 
 
 # --- validation ------------------------------------------------------------
-def _ignore_required(*_args: Any) -> tuple[()]:
-    return ()
-
-
 def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
@@ -339,10 +333,20 @@ def _validate_traits_against_schema(
     errors: list[str] = []
 
     try:
-        cls = validator_for(trait_schema)
-        if not check_unresolved:
-            cls = validators.extend(cls, {"required": _ignore_required})
-        validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
+        validation_schema = (
+            trait_schema
+            if check_unresolved
+            else map_schema_nodes(
+                trait_schema,
+                lambda node: (
+                    {k: v for k, v in node.items() if k != "required"}
+                    if isinstance(node, dict)
+                    else node
+                ),
+            )
+        )
+        cls = validator_for(validation_schema)
+        validator = cls(validation_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
     except Exception as e:  # noqa: BLE001 - surfaced as validation error message
