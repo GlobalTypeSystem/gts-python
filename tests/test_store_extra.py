@@ -179,6 +179,16 @@ class TestSchemaDependencies:
             )
         ) == [("gts.x.test._.missing.v1~", True)]
 
+    def test_resolves_relative_x_gts_ref_dependency(self):
+        store = GtsStore(reader=None)
+        schema = {
+            "target": "gts.x.test._.target.v1~",
+            "properties": {"ref": {"x-gts-ref": "/target"}},
+        }
+        assert list(store._schema_dependencies(schema)) == [
+            ("gts.x.test._.target.v1~", True)
+        ]
+
 
 class TestValidateGtsKeywords:
     def test_final_must_be_bool(self):

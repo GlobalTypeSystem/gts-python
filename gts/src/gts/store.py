@@ -781,6 +781,7 @@ class GtsStore:
         validated.add(key)
 
     def _schema_dependencies(self, schema: Any) -> Iterator[tuple[str, bool]]:
+        x_gts_ref_validator = XGtsRefValidator(enforce_existence=False)
         for subschema, _path in iter_schema_nodes(schema):
             ref_uri = subschema.get("$ref")
             if isinstance(ref_uri, str):
@@ -788,7 +789,9 @@ class GtsStore:
                 if not ref.is_local and ref.is_gts and ref.has_scheme:
                     yield ref.target_id, True
 
-            x_gts_ref = subschema.get("x-gts-ref")
+            x_gts_ref = x_gts_ref_validator.resolve_ref_pattern(
+                subschema.get("x-gts-ref"), schema
+            )
             if (
                 isinstance(x_gts_ref, str)
                 and x_gts_ref.startswith("gts.")

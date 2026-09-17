@@ -249,20 +249,26 @@ class XGtsRefValidator:
         return errors
 
     def validate_schema_ref_existence(
-        self, schema: Any, schema_path: str = ""
+        self,
+        schema: Any,
+        schema_path: str = "",
+        root_schema: dict[str, Any] | None = None,
     ) -> list[XGtsRefValidationError]:
         if self.store is None or not self.enforce_existence:
             return []
 
+        if root_schema is None:
+            root_schema = schema
         store = self.store
         errors: list[XGtsRefValidationError] = []
         for subschema, path in iter_schema_nodes(schema, schema_path):
             ref_pattern = subschema.get("x-gts-ref")
+            resolved_pattern = self.resolve_ref_pattern(ref_pattern, root_schema)
             if (
-                not isinstance(ref_pattern, str)
-                or not ref_pattern.startswith(GTS_PREFIX)
-                or "*" in ref_pattern
-                or store.get(ref_pattern) is not None
+                not isinstance(resolved_pattern, str)
+                or not resolved_pattern.startswith(GTS_PREFIX)
+                or "*" in resolved_pattern
+                or store.get(resolved_pattern) is not None
             ):
                 continue
             ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
@@ -270,11 +276,20 @@ class XGtsRefValidator:
                 XGtsRefValidationError(
                     ref_path,
                     ref_pattern,
-                    ref_pattern,
-                    f"x-gts-ref constraint type '{ref_pattern}' is not registered",
+                    resolved_pattern,
+                    f"x-gts-ref constraint type '{resolved_pattern}' is not registered",
                 )
             )
         return errors
+
+    def resolve_ref_pattern(
+        self, ref_pattern: Any, root_schema: dict[str, Any]
+    ) -> str | None:
+        if not isinstance(ref_pattern, str):
+            return None
+        if ref_pattern.startswith("/"):
+            return self._resolve_pointer(root_schema, ref_pattern)
+        return strip_scheme(ref_pattern)
 
     def _validate_ref_value(
         self, value: str, ref_pattern: str, field_path: str, schema: dict[str, Any]
@@ -301,7 +316,7 @@ class XGtsRefValidator:
 
         # Resolve pattern if it's a relative reference
         if ref_pattern.startswith("/"):
-            resolved_pattern = self._resolve_pointer(schema, ref_pattern)
+            resolved_pattern = self.resolve_ref_pattern(ref_pattern, schema)
             if resolved_pattern is None:
                 return XGtsRefValidationError(
                     field_path,

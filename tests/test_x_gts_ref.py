@@ -113,7 +113,10 @@ class TestValidateSchemaRefExistence:
 
         assert len(errors) == 1
         assert errors[0].field_path == "properties/ref/x-gts-ref"
-        assert "constraint type 'gts.x.test._.foo.v1~' is not registered" in errors[0].reason
+        assert (
+            "constraint type 'gts.x.test._.foo.v1~' is not registered"
+            in errors[0].reason
+        )
 
     def test_registered_and_wildcard_constraints_pass(self):
         class FakeStore:
@@ -139,6 +142,38 @@ class TestValidateSchemaRefExistence:
 
         errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
             {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
+        )
+        assert errors == []
+
+    def test_relative_constraint_type_must_exist(self):
+        class FakeStore:
+            def get(self, value):
+                return None
+
+        schema = {
+            "target": "gts.x.test._.missing.v1~",
+            "properties": {"ref": {"x-gts-ref": "/target"}},
+        }
+        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+            schema
+        )
+        assert len(errors) == 1
+        assert (
+            "constraint type 'gts.x.test._.missing.v1~' is not registered"
+            in errors[0].reason
+        )
+
+    def test_relative_constraint_type_can_resolve(self):
+        class FakeStore:
+            def get(self, value):
+                return object() if value == "gts.x.test._.target.v1~" else None
+
+        schema = {
+            "target": "gts.x.test._.target.v1~",
+            "properties": {"ref": {"x-gts-ref": "/target"}},
+        }
+        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+            schema
         )
         assert errors == []
 
@@ -218,9 +253,7 @@ class TestValidateInstanceValue:
             "type": "array",
             "items": {"x-gts-ref": "gts.x.test.*"},
         }
-        errors = XGtsRefValidator().validate_instance(
-            ["gts.x.other.v1~"], schema
-        )
+        errors = XGtsRefValidator().validate_instance(["gts.x.other.v1~"], schema)
         assert len(errors) == 1
 
     def test_object_properties_recursion(self):
