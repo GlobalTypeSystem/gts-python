@@ -115,6 +115,26 @@ class TestValidateSchemaRefs:
             {"allOf": [{"$ref": "gts://gts.x.test._.target.v1~"}]}
         )
 
+    def test_non_schema_gts_ref_target_raises(self):
+        target_id = "gts.x.test._.target.v1~"
+        target = GtsEntity(
+            content={"$id": target_id}, gts_id=GtsID(target_id), is_schema=False
+        )
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets({"$ref": f"gts://{target_id}"})
+
+    def test_transitive_missing_gts_ref_target_raises(self):
+        target = _schema_entity(
+            "gts.x.test._.target.v1~",
+            {"$ref": "gts://gts.x.test._.missing.v1~"},
+        )
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {"$ref": "gts://gts.x.test._.target.v1~"}
+            )
+
     def test_missing_gts_ref_target_raises(self):
         store = GtsStore(reader=None)
         with pytest.raises(ValueError, match="Unresolvable \\$ref"):
