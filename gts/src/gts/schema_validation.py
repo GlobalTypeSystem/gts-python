@@ -18,6 +18,7 @@ _SCHEMA_MAP_KEYWORDS = {
     "properties",
 }
 _SCHEMA_ARRAY_KEYWORDS = {"allOf", "anyOf", "oneOf", "prefixItems"}
+_DRAFT3_SCHEMA_KEYWORDS = {"disallow", "extends", "type"}
 _SCHEMA_SINGLE_KEYWORDS = {
     "additionalItems",
     "additionalProperties",
@@ -50,6 +51,13 @@ def iter_schema_nodes(
                 yield from iter_schema_nodes(child, f"{keyword_path}[{index}]")
         elif keyword in _SCHEMA_SINGLE_KEYWORDS:
             yield from iter_schema_nodes(value, keyword_path)
+        elif keyword in _DRAFT3_SCHEMA_KEYWORDS:
+            if isinstance(value, dict):
+                yield from iter_schema_nodes(value, keyword_path)
+            elif isinstance(value, list):
+                for index, child in enumerate(value):
+                    if isinstance(child, dict):
+                        yield from iter_schema_nodes(child, f"{keyword_path}[{index}]")
         elif keyword == "items":
             if isinstance(value, list):
                 for index, child in enumerate(value):
@@ -76,6 +84,16 @@ def map_schema_nodes(schema: Any, transform: Callable[[Any], Any]) -> Any:
             mapped[keyword] = [map_schema_nodes(child, transform) for child in value]
         elif keyword in _SCHEMA_SINGLE_KEYWORDS:
             mapped[keyword] = map_schema_nodes(value, transform)
+        elif keyword in _DRAFT3_SCHEMA_KEYWORDS:
+            if isinstance(value, dict):
+                mapped[keyword] = map_schema_nodes(value, transform)
+            elif isinstance(value, list):
+                mapped[keyword] = [
+                    map_schema_nodes(child, transform)
+                    if isinstance(child, dict)
+                    else copy.deepcopy(child)
+                    for child in value
+                ]
         elif keyword == "items":
             if isinstance(value, list):
                 mapped[keyword] = [

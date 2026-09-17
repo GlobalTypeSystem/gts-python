@@ -100,6 +100,34 @@ class TestValidateSchema:
         assert len(errors) == 1
         assert errors[0].field_path == "properties/x-gts-ref/x-gts-ref"
 
+    def test_recurses_into_draft3_schema_forms(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-03/schema#",
+            "extends": {"x-gts-ref": "invalid-extends"},
+            "type": ["object", {"x-gts-ref": "invalid-type"}],
+            "disallow": ["array", {"x-gts-ref": "invalid-disallow"}],
+        }
+        errors = XGtsRefValidator().validate_schema(schema)
+        assert [error.field_path for error in errors] == [
+            "extends/x-gts-ref",
+            "type[1]/x-gts-ref",
+            "disallow[1]/x-gts-ref",
+        ]
+
+    def test_resolves_relative_patterns_before_extracting_subschema(self):
+        root = {
+            "x-gts-traits-schema": {
+                "constraintType": "gts.x.test._.target.v1~",
+                "properties": {
+                    "ref": {"x-gts-ref": "/x-gts-traits-schema/constraintType"}
+                },
+            }
+        }
+        resolved = XGtsRefValidator().resolve_schema_ref_patterns(
+            root["x-gts-traits-schema"], root
+        )
+        assert resolved["properties"]["ref"]["x-gts-ref"] == ("gts.x.test._.target.v1~")
+
 
 class TestValidateSchemaRefExistence:
     def test_missing_concrete_constraint_type_fails(self):

@@ -291,6 +291,22 @@ class XGtsRefValidator:
             return self._resolve_pointer(root_schema, ref_pattern)
         return strip_scheme(ref_pattern)
 
+    def resolve_schema_ref_patterns(
+        self, schema: Any, root_schema: dict[str, Any]
+    ) -> Any:
+        def resolve(node: Any) -> Any:
+            if not isinstance(node, dict):
+                return node
+            ref_pattern = node.get("x-gts-ref")
+            if not isinstance(ref_pattern, str) or not ref_pattern.startswith("/"):
+                return node
+            resolved_pattern = self.resolve_ref_pattern(ref_pattern, root_schema)
+            if resolved_pattern is not None:
+                node["x-gts-ref"] = resolved_pattern
+            return node
+
+        return map_schema_nodes(schema, resolve)
+
     def _validate_ref_value(
         self, value: str, ref_pattern: str, field_path: str, schema: dict[str, Any]
     ) -> XGtsRefValidationError | None:

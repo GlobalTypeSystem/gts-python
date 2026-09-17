@@ -563,6 +563,7 @@ class GtsStore:
 
         trait_schemas: list[Any] = []
         merged_traits: dict[str, Any] = {}
+        x_gts_ref_validator = XGtsRefValidator(enforce_existence=False)
 
         for schema_id in chain_ids:
             entity = self.get(schema_id)
@@ -582,7 +583,10 @@ class GtsStore:
                 # Inline local JSON Pointer refs against the host document, then
                 # resolve any gts:// refs so the composed schema is self-contained.
                 inlined = traits.inline_local_pointers(ts, content)
-                trait_schemas.append(self._resolve_schema_refs(inlined))
+                resolved_patterns = x_gts_ref_validator.resolve_schema_ref_patterns(
+                    inlined, content
+                )
+                trait_schemas.append(self._resolve_schema_refs(resolved_patterns))
 
             level_traits: dict[str, Any] = {}
             traits.collect_traits_from_value(content, level_traits)
