@@ -221,13 +221,14 @@ class TestBuildEffectiveTraits:
         errors = effective.validate(check_unresolved=False)
         assert errors == []
 
-    def test_abstract_skips_standard_trait_validation(self):
+    def test_abstract_validates_provided_trait_values(self):
         schema = {
             "type": "object",
             "properties": {"a": {"type": "string"}},
         }
         effective = build_effective_traits([schema], {"a": 5}, None)
-        assert effective.validate(check_unresolved=False) == []
+        errors = effective.validate(check_unresolved=False)
+        assert any("is not of type 'string'" in error for error in errors)
 
     def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
         class FakeStore:

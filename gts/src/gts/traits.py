@@ -72,10 +72,13 @@ class EffectiveTraits:
             return []
 
         if _effective_schema_is_false(self.schema):
-            if self._has_explicit_values():
+            has_non_false_declaration = any(
+                declaration is not False for declaration in self.resolved_trait_schemas
+            )
+            if self._has_explicit_values() or has_non_false_declaration:
                 return [
                     f"{X_GTS_TRAITS_SCHEMA} resolves to `false` in the chain - "  # noqa: ISC004
-                    f"{X_GTS_TRAITS} values are prohibited"
+                    "trait declarations and values are prohibited"
                 ]
             return []
 
@@ -274,6 +277,18 @@ def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
 
 
 # --- validation ------------------------------------------------------------
+def _without_required(schema: Any) -> Any:
+    if isinstance(schema, dict):
+        return {
+            key: _without_required(value)
+            for key, value in schema.items()
+            if key != "required"
+        }
+    if isinstance(schema, list):
+        return [_without_required(value) for value in schema]
+    return copy.deepcopy(schema)
+
+
 def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
@@ -369,12 +384,13 @@ def _validate_trait_values(
     check_unresolved: bool,
     reference_store: Any | None,
 ) -> list[str]:
-    errors = (
-        _validate_traits_against_schema(
-            effective_traits_schema, effective_traits, check_unresolved
-        )
+    schema_for_values = (
+        effective_traits_schema
         if check_unresolved
-        else []
+        else _without_required(effective_traits_schema)
+    )
+    errors = _validate_traits_against_schema(
+        schema_for_values, effective_traits, check_unresolved
     )
     xref = XGtsRefValidator(store=reference_store)
     for err in xref.validate_schema_ref_existence(effective_traits_schema):

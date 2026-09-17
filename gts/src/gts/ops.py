@@ -667,18 +667,21 @@ class GtsOps:
             return GtsValidationResult(id=gts_id, ok=False, error=str(e))
 
     def validate_entity(self, gts_id: str) -> GtsEntityValidationResult:
-        try:
-            parsed = GtsID(gts_id)
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            return GtsEntityValidationResult(
-                id=gts_id, ok=False, entity_type="", error=str(e)
-            )
+        entity = self.store.get(gts_id)
+        if entity:
+            entity_type = "schema" if entity.is_schema else "instance"
+        else:
+            try:
+                parsed = GtsID(gts_id)
+                entity_type = "schema" if parsed.is_type else "instance"
+            except Exception as e:  # noqa: BLE001 - converted at API boundary
+                return GtsEntityValidationResult(
+                    id=gts_id, ok=False, entity_type="", error=str(e)
+                )
 
-        if parsed.is_type:
-            entity_type = "schema"
+        if entity_type == "schema":
             result = self.validate_schema(gts_id)
         else:
-            entity_type = "instance"
             result = self.validate_instance(gts_id)
 
         return GtsEntityValidationResult(

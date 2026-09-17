@@ -91,6 +91,7 @@ class XGtsRefValidator:
         """
         self.store = store
         self.enforce_existence = enforce_existence
+        self.referenced_ids: set[str] = set()
 
     def validate_instance(
         self, instance: dict[str, Any], schema: dict[str, Any], instance_path: str = ""
@@ -492,6 +493,7 @@ class XGtsRefValidator:
                     pattern,
                     f"Referenced entity '{value}' not found in registry",
                 )
+            self.referenced_ids.add(value)
 
         return None
 
