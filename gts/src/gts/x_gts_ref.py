@@ -222,6 +222,7 @@ class XGtsRefValidator:
         schema: dict[str, Any],
         schema_path: str = "",
         root_schema: dict[str, Any] | None = None,
+        resolve_relative: bool = True,
     ) -> list[XGtsRefValidationError]:
         """
         Validate x-gts-ref fields in a schema definition.
@@ -230,6 +231,7 @@ class XGtsRefValidator:
             schema: The JSON schema to validate
             schema_path: Current path in schema (for error reporting)
             root_schema: The root schema (for resolving relative refs)
+            resolve_relative: Whether relative refs must resolve during this check
 
         Returns:
             List of validation errors (empty if valid)
@@ -242,6 +244,12 @@ class XGtsRefValidator:
             if "x-gts-ref" not in subschema:
                 continue
             ref_value = subschema["x-gts-ref"]
+            if (
+                not resolve_relative
+                and isinstance(ref_value, str)
+                and ref_value.startswith("/")
+            ):
+                continue
             ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
             error = self._validate_ref_pattern(ref_value, ref_path, root_schema)
             if error:

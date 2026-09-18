@@ -384,7 +384,10 @@ class GtsOps:
         self.store = GtsStore(self._reader)
 
     def add_entity(
-        self, content: dict[str, Any], validate: bool = False
+        self,
+        content: dict[str, Any],
+        validate: bool = False,
+        resolve_relative: bool = True,
     ) -> GtsAddEntityResult:
         entity = GtsEntity(content=content, cfg=self.cfg)
 
@@ -427,7 +430,9 @@ class GtsOps:
 
         try:
             if entity.is_schema:
-                self.store.validate_schema_basic(entity.gts_id.id)
+                self.store.validate_schema_basic(
+                    entity.gts_id.id, resolve_relative=resolve_relative
+                )
                 if validate:
                     self.store.validate_schema(entity.gts_id.id)
             elif validate:
@@ -456,7 +461,7 @@ class GtsOps:
     ) -> GtsAddEntitiesResult:
         results: list[GtsAddEntityResult] = []
         for it in items:
-            results.append(self.add_entity(it))
+            results.append(self.add_entity(it, resolve_relative=False))
         ok = all(r.ok for r in results)
         return GtsAddEntitiesResult(ok=ok, results=results)
 

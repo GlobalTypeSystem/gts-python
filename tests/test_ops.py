@@ -144,6 +144,16 @@ class TestAddEntity:
         assert result.ok is True
         assert len(result.results) == 2
 
+    def test_add_entities_defers_relative_pointer_resolution(self, ops):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$id": "gts://gts.x.test._.relative.v1~",
+            "properties": {"ref": {"x-gts-ref": "/missing"}},
+        }
+        result = ops.add_entities([schema])
+        assert result.ok is True
+        assert ops.validate_schema("gts.x.test._.relative.v1~").ok is False
+
 
 class TestAddSchemaLegacy:
     def test_add_schema_legacy_success(self, ops):

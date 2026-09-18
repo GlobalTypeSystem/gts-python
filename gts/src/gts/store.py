@@ -327,7 +327,9 @@ class GtsStore:
             for index, item in enumerate(schema):
                 self._validate_schema_ref_targets(item, f"{path}[{index}]", visited)
 
-    def _validate_schema_x_gts_refs(self, gts_id: str) -> None:
+    def _validate_schema_x_gts_refs(
+        self, gts_id: str, resolve_relative: bool = True
+    ) -> None:
         """
         Validate a schema's x-gts-ref fields.
 
@@ -342,16 +344,23 @@ class GtsStore:
         if not schema_entity.is_schema:
             raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
-        self._validate_schema_x_gts_refs_content(schema_id.id, schema_entity.content)
+        self._validate_schema_x_gts_refs_content(
+            schema_id.id, schema_entity.content, resolve_relative=resolve_relative
+        )
 
     def _validate_schema_x_gts_refs_content(
-        self, gts_id: str, schema_content: dict[str, Any]
+        self,
+        gts_id: str,
+        schema_content: dict[str, Any],
+        resolve_relative: bool = True,
     ) -> None:
         logger.info(f"Validating schema x-gts-ref fields for {gts_id}")
 
         # Validate x-gts-ref constraints in the schema
         x_gts_ref_validator = XGtsRefValidator(store=self)
-        x_gts_ref_errors = x_gts_ref_validator.validate_schema(schema_content)
+        x_gts_ref_errors = x_gts_ref_validator.validate_schema(
+            schema_content, resolve_relative=resolve_relative
+        )
         if x_gts_ref_errors:
             error_messages = [
                 f"{err.field_path}: {err.reason}" for err in x_gts_ref_errors
@@ -624,7 +633,7 @@ class GtsStore:
                 f"Schema '{gts_id}' trait validation failed: " + "; ".join(errors)
             )
 
-    def validate_schema_basic(self, gts_id: str) -> None:
+    def validate_schema_basic(self, gts_id: str, resolve_relative: bool = True) -> None:
         """Basic schema validation during registration (no chain validation).
 
         Checks:
@@ -661,7 +670,7 @@ class GtsStore:
         self._validate_schema_refs(schema_content, "")
 
         # 2. Validate x-gts-ref fields
-        self._validate_schema_x_gts_refs(gts_id)
+        self._validate_schema_x_gts_refs(gts_id, resolve_relative=resolve_relative)
 
         # 3. Validate GTS keywords (x-gts-final, x-gts-abstract, placement)
         self._validate_gts_keywords(schema_content)

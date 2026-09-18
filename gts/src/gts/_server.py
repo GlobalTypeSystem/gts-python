@@ -345,8 +345,11 @@ class GtsHttpServer:
         self,
         body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
         validate: bool = Query(False),
+        validation: bool = Query(False),
     ) -> JSONResponse:
-        result = self.ops.add_entity(body, validate=validate)
+        result = self.ops.add_entity(
+            body, validate=validate is True or validation is True
+        )
         status_code = 200 if result.ok else 409 if result.conflict else 422
         return JSONResponse(result.to_dict(), status_code=status_code)
 
