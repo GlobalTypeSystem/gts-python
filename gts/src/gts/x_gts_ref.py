@@ -204,10 +204,30 @@ class XGtsRefValidator:
                         prop_path = f"{path}.{prop_name}" if path else prop_name
                         visit_instance(inst[prop_name], prop_schema, prop_path, errs)
 
-            if "items" in sch and isinstance(inst, list):
-                for idx, item in enumerate(inst):
-                    item_path = f"{path}[{idx}]"
-                    visit_instance(item, sch["items"], item_path, errs)
+            if isinstance(inst, list):
+                prefix_items = sch.get("prefixItems")
+                items = sch.get("items")
+                if isinstance(prefix_items, list):
+                    for idx, item_schema in enumerate(prefix_items[: len(inst)]):
+                        item_path = f"{path}[{idx}]"
+                        visit_instance(inst[idx], item_schema, item_path, errs)
+                    if isinstance(items, dict):
+                        for idx in range(len(prefix_items), len(inst)):
+                            item_path = f"{path}[{idx}]"
+                            visit_instance(inst[idx], items, item_path, errs)
+                elif isinstance(items, list):
+                    for idx, item_schema in enumerate(items[: len(inst)]):
+                        item_path = f"{path}[{idx}]"
+                        visit_instance(inst[idx], item_schema, item_path, errs)
+                    additional_items = sch.get("additionalItems")
+                    if isinstance(additional_items, dict):
+                        for idx in range(len(items), len(inst)):
+                            item_path = f"{path}[{idx}]"
+                            visit_instance(inst[idx], additional_items, item_path, errs)
+                elif isinstance(items, dict):
+                    for idx, item in enumerate(inst):
+                        item_path = f"{path}[{idx}]"
+                        visit_instance(item, items, item_path, errs)
 
         def _validate_branch(inst, branch, path):
             branch_errors: list[XGtsRefValidationError] = []

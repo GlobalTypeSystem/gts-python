@@ -284,6 +284,36 @@ class TestValidateInstanceValue:
         errors = XGtsRefValidator().validate_instance(["gts.x.other.v1~"], schema)
         assert len(errors) == 1
 
+    def test_tuple_additional_items_recursion(self):
+        schema = {
+            "type": "array",
+            "items": [{"type": "string"}],
+            "additionalItems": {
+                "type": "string",
+                "x-gts-ref": "gts.x.test._.target.v1~",
+            },
+        }
+        errors = XGtsRefValidator().validate_instance(
+            ["tuple-prefix", "gts.x.other._.target.v1~"], schema
+        )
+        assert len(errors) == 1
+        assert errors[0].field_path == "[1]"
+
+    def test_prefix_items_recursion(self):
+        schema = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}],
+            "items": {
+                "type": "string",
+                "x-gts-ref": "gts.x.test._.target.v1~",
+            },
+        }
+        errors = XGtsRefValidator().validate_instance(
+            ["tuple-prefix", "gts.x.other._.target.v1~"], schema
+        )
+        assert len(errors) == 1
+        assert errors[0].field_path == "[1]"
+
     def test_object_properties_recursion(self):
         schema = {
             "type": "object",
