@@ -151,6 +151,9 @@ class TestValidateSchemaRefExistence:
             def get(self, value):
                 return object() if value == "gts.x.test._.foo.v1~" else None
 
+            def items(self):
+                return [("gts.x.test._.foo.v1~", object())]
+
         errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
             {
                 "allOf": [

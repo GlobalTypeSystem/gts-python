@@ -21,6 +21,7 @@ from typing import Any
 
 from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
+from .gts_ref_validation import GtsRefValidationMode
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
 from .schema_validation import map_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator
@@ -53,7 +54,10 @@ class EffectiveTraits:
         return isinstance(self.merged_traits, dict) and len(self.merged_traits) > 0
 
     def validate(
-        self, check_unresolved: bool, reference_store: Any | None = None
+        self,
+        check_unresolved: bool,
+        reference_store: Any | None = None,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
     ) -> list[str]:
         """Return a list of error strings (empty means valid)."""
         errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
@@ -83,7 +87,11 @@ class EffectiveTraits:
             return []
 
         return _validate_trait_values(
-            self.schema, self.values, check_unresolved, reference_store
+            self.schema,
+            self.values,
+            check_unresolved,
+            reference_store,
+            gts_ref_validation,
         )
 
 
@@ -277,6 +285,17 @@ def _materialize_traits(trait_schema: Any, traits: Any, depth: int = 0) -> Any:
 
 
 # --- validation ------------------------------------------------------------
+def _without_required(schema: Any) -> Any:
+    def strip(node: Any) -> Any:
+        if not isinstance(node, dict):
+            return node
+        result = dict(node)
+        result.pop("required", None)
+        return result
+
+    return map_schema_nodes(copy.deepcopy(schema), strip)
+
+
 def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
@@ -333,20 +352,8 @@ def _validate_traits_against_schema(
     errors: list[str] = []
 
     try:
-        validation_schema = (
-            trait_schema
-            if check_unresolved
-            else map_schema_nodes(
-                trait_schema,
-                lambda node: (
-                    {k: v for k, v in node.items() if k != "required"}
-                    if isinstance(node, dict)
-                    else node
-                ),
-            )
-        )
-        cls = validator_for(validation_schema)
-        validator = cls(validation_schema, format_checker=_FORMAT_CHECKER)
+        cls = validator_for(trait_schema)
+        validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
     except Exception as e:  # noqa: BLE001 - surfaced as validation error message
@@ -383,11 +390,17 @@ def _validate_trait_values(
     effective_traits: Any,
     check_unresolved: bool,
     reference_store: Any | None,
+    gts_ref_validation: GtsRefValidationMode,
 ) -> list[str]:
-    errors = _validate_traits_against_schema(
-        effective_traits_schema, effective_traits, check_unresolved
+    schema_for_values = (
+        effective_traits_schema
+        if check_unresolved
+        else _without_required(effective_traits_schema)
     )
-    xref = XGtsRefValidator(store=reference_store)
+    errors = _validate_traits_against_schema(
+        schema_for_values, effective_traits, check_unresolved
+    )
+    xref = XGtsRefValidator(store=reference_store, mode=gts_ref_validation)
     for err in xref.validate_schema_ref_existence(effective_traits_schema):
         errors.append(f"trait x-gts-ref: {err.reason}")
     for err in xref.validate_instance(effective_traits, effective_traits_schema, ""):

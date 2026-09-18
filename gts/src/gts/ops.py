@@ -10,11 +10,21 @@ from ._naming import looks_like_gts
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
 from .gts import GtsID, GtsWildcard
+from .gts_ref_validation import GtsRefValidationMode
 from .path_resolver import GtsPathResolver
 from .schema_cast import GtsEntityCastResult
 from .store import GtsStore, GtsStoreQueryResult
 
 # Interface helpers
+
+
+def _normalize_gts_ref_validation(value: Any) -> GtsRefValidationMode:
+    if isinstance(value, GtsRefValidationMode):
+        return value
+    try:
+        return GtsRefValidationMode(value)
+    except (TypeError, ValueError):
+        return GtsRefValidationMode.FULL
 
 
 @dataclass
@@ -387,8 +397,10 @@ class GtsOps:
         self,
         content: dict[str, Any],
         validate: bool = False,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
         resolve_relative: bool = True,
     ) -> GtsAddEntityResult:
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         entity = GtsEntity(content=content, cfg=self.cfg)
 
         # For instances (non-schemas), require an id field from entity_id_fields
@@ -434,9 +446,11 @@ class GtsOps:
                     entity.gts_id.id, resolve_relative=resolve_relative
                 )
                 if validate:
-                    self.store.validate_schema(entity.gts_id.id)
+                    self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
             elif validate:
-                self.store.validate_instance(entity.raw_id or entity.gts_id.id)
+                self.store.validate_instance(
+                    entity.raw_id or entity.gts_id.id, gts_ref_validation
+                )
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
             self.store.unregister(store_key)
             if previous:
@@ -657,21 +671,36 @@ class GtsOps:
             is_type_schema=entity.is_schema,
         )
 
-    def validate_instance(self, gts_id: str) -> GtsValidationResult:
+    def validate_instance(
+        self,
+        gts_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+    ) -> GtsValidationResult:
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         try:
-            self.store.validate_instance(gts_id)
+            self.store.validate_instance(gts_id, gts_ref_validation)
             return GtsValidationResult(id=gts_id, ok=True)
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
             return GtsValidationResult(id=gts_id, ok=False, error=str(e))
 
-    def validate_schema(self, gts_id: str) -> GtsValidationResult:
+    def validate_schema(
+        self,
+        gts_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+    ) -> GtsValidationResult:
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         try:
-            self.store.validate_schema(gts_id)
+            self.store.validate_schema(gts_id, gts_ref_validation)
             return GtsValidationResult(id=gts_id, ok=True)
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
             return GtsValidationResult(id=gts_id, ok=False, error=str(e))
 
-    def validate_entity(self, gts_id: str) -> GtsEntityValidationResult:
+    def validate_entity(
+        self,
+        gts_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+    ) -> GtsEntityValidationResult:
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         entity = self.store.get(gts_id)
         if entity:
             entity_type = "schema" if entity.is_schema else "instance"
@@ -685,9 +714,9 @@ class GtsOps:
                 )
 
         if entity_type == "schema":
-            result = self.validate_schema(gts_id)
+            result = self.validate_schema(gts_id, gts_ref_validation)
         else:
-            result = self.validate_instance(gts_id)
+            result = self.validate_instance(gts_id, gts_ref_validation)
 
         return GtsEntityValidationResult(
             id=result.id, ok=result.ok, entity_type=entity_type, error=result.error

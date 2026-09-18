@@ -14,6 +14,7 @@ from .gts import (
     GtsIdSegment,
     GtsWildcard,
 )
+from .gts_ref_validation import GtsRefValidationMode
 from .path_resolver import GtsPathResolver
 from .store import (
     GtsReader,
@@ -30,6 +31,7 @@ __all__ = [
     "GtsIdSegment",
     "GtsPathResolver",
     "GtsReader",
+    "GtsRefValidationMode",
     "GtsStore",
     "GtsWildcard",
     "JsonEntity",
