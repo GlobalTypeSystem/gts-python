@@ -58,6 +58,7 @@ class EffectiveTraits:
         check_unresolved: bool,
         reference_store: Any | None = None,
         gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        selected_type_id: str | None = None,
     ) -> list[str]:
         """Return a list of error strings (empty means valid)."""
         errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
@@ -92,6 +93,7 @@ class EffectiveTraits:
             check_unresolved,
             reference_store,
             gts_ref_validation,
+            selected_type_id,
         )
 
 
@@ -391,6 +393,7 @@ def _validate_trait_values(
     check_unresolved: bool,
     reference_store: Any | None,
     gts_ref_validation: GtsRefValidationMode,
+    selected_type_id: str | None,
 ) -> list[str]:
     schema_for_values = (
         effective_traits_schema
@@ -401,8 +404,14 @@ def _validate_trait_values(
         schema_for_values, effective_traits, check_unresolved
     )
     xref = XGtsRefValidator(store=reference_store, mode=gts_ref_validation)
-    for err in xref.validate_schema_ref_existence(effective_traits_schema):
+    for err in xref.validate_schema_ref_existence(
+        effective_traits_schema, selected_type_id=selected_type_id
+    ):
         errors.append(f"trait x-gts-ref: {err.reason}")
-    for err in xref.validate_instance(effective_traits, effective_traits_schema, ""):
+    for err in xref.validate_instance(
+        effective_traits,
+        effective_traits_schema,
+        selected_type_id=selected_type_id,
+    ):
         errors.append(f"trait x-gts-ref: {err.reason}")
     return errors

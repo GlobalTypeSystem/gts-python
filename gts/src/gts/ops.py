@@ -398,7 +398,6 @@ class GtsOps:
         content: dict[str, Any],
         validate: bool = False,
         gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
-        resolve_relative: bool = True,
     ) -> GtsAddEntityResult:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         entity = GtsEntity(content=content, cfg=self.cfg)
@@ -442,9 +441,7 @@ class GtsOps:
 
         try:
             if entity.is_schema:
-                self.store.validate_schema_basic(
-                    entity.gts_id.id, resolve_relative=resolve_relative
-                )
+                self.store.validate_schema_basic(entity.gts_id.id)
                 if validate:
                     self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
             elif validate:
@@ -475,7 +472,7 @@ class GtsOps:
     ) -> GtsAddEntitiesResult:
         results: list[GtsAddEntityResult] = []
         for it in items:
-            results.append(self.add_entity(it, resolve_relative=False))
+            results.append(self.add_entity(it))
         ok = all(r.ok for r in results)
         return GtsAddEntitiesResult(ok=ok, results=results)
 

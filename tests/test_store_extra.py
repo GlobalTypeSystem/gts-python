@@ -1,17 +1,18 @@
 """Additional coverage-focused tests for gts.store.GtsStore."""
 
-import pytest
-from typing import Iterator, Optional
+from collections.abc import Iterator
+from typing import Optional
 
+import pytest
+from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
+from gts.gts import GtsID
+from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 from gts.store import (
-    GtsStore,
     GtsReader,
+    GtsStore,
     StoreGtsEntityNotFound,
     StoreGtsObjectNotFound,
 )
-from gts.entities import GtsEntity, DEFAULT_GTS_CONFIG
-from gts.gts import GtsID
-from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 
 
 class MockGtsReader(GtsReader):
@@ -171,15 +172,13 @@ class TestSchemaDependencies:
             )
         ) == [("gts.x.test._.missing.v1~", True)]
 
-    def test_resolves_relative_x_gts_ref_dependency(self):
+    def test_unsupported_x_gts_ref_pointer_is_not_a_dependency(self):
         store = GtsStore(reader=None)
         schema = {
             "target": "gts.x.test._.target.v1~",
             "properties": {"ref": {"x-gts-ref": "/target"}},
         }
-        assert list(store._schema_dependencies(schema)) == [
-            ("gts.x.test._.target.v1~", True)
-        ]
+        assert list(store._schema_dependencies(schema)) == []
 
 
 class TestValidateGtsKeywords:
@@ -248,7 +247,7 @@ class TestValidateSchemaXGtsRefs:
         with pytest.raises(Exception, match="x-gts-ref validation failed"):
             store._validate_schema_x_gts_refs("gts.x.test._.foo.v1~")
 
-    def test_basic_validation_can_defer_relative_pointer_resolution(self):
+    def test_basic_validation_rejects_unsupported_pointer(self):
         schema = _schema_entity(
             "gts.x.test._.foo.v1~",
             {
@@ -261,8 +260,7 @@ class TestValidateSchemaXGtsRefs:
         )
         store = GtsStore(reader=None)
         store.register(schema)
-        store.validate_schema_basic("gts.x.test._.foo.v1~", resolve_relative=False)
-        with pytest.raises(Exception, match="x-gts-ref validation failed"):
+        with pytest.raises(Exception, match="must be a GTS identifier"):
             store.validate_schema_basic("gts.x.test._.foo.v1~")
 
 

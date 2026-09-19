@@ -323,9 +323,7 @@ class GtsStore:
             for index, item in enumerate(schema):
                 self._validate_schema_ref_targets(item, f"{path}[{index}]", visited)
 
-    def _validate_schema_x_gts_refs(
-        self, gts_id: str, resolve_relative: bool = True
-    ) -> None:
+    def _validate_schema_x_gts_refs(self, gts_id: str) -> None:
         """
         Validate a schema's x-gts-ref fields.
 
@@ -340,23 +338,16 @@ class GtsStore:
         if not schema_entity.is_schema:
             raise ValueError(f"Entity '{schema_id.id}' is not a schema")
 
-        self._validate_schema_x_gts_refs_content(
-            schema_id.id, schema_entity.content, resolve_relative=resolve_relative
-        )
+        self._validate_schema_x_gts_refs_content(schema_id.id, schema_entity.content)
 
     def _validate_schema_x_gts_refs_content(
-        self,
-        gts_id: str,
-        schema_content: dict[str, Any],
-        resolve_relative: bool = True,
+        self, gts_id: str, schema_content: dict[str, Any]
     ) -> None:
         logger.info(f"Validating schema x-gts-ref fields for {gts_id}")
 
         # Validate x-gts-ref constraints in the schema
         x_gts_ref_validator = XGtsRefValidator(store=self)
-        x_gts_ref_errors = x_gts_ref_validator.validate_schema(
-            schema_content, resolve_relative=resolve_relative
-        )
+        x_gts_ref_errors = x_gts_ref_validator.validate_schema(schema_content)
         if x_gts_ref_errors:
             error_messages = [
                 f"{err.field_path}: {err.reason}" for err in x_gts_ref_errors
@@ -629,13 +620,14 @@ class GtsStore:
             check_unresolved=not is_abstract,
             reference_store=self,
             gts_ref_validation=gts_ref_validation,
+            selected_type_id=gts_id,
         )
         if errors:
             raise ValueError(
                 f"Schema '{gts_id}' trait validation failed: " + "; ".join(errors)
             )
 
-    def validate_schema_basic(self, gts_id: str, resolve_relative: bool = True) -> None:
+    def validate_schema_basic(self, gts_id: str) -> None:
         """Basic schema validation during registration (no chain validation).
 
         Checks:
@@ -672,7 +664,7 @@ class GtsStore:
         self._validate_schema_refs(schema_content, "")
 
         # 2. Validate x-gts-ref fields
-        self._validate_schema_x_gts_refs(gts_id, resolve_relative=resolve_relative)
+        self._validate_schema_x_gts_refs(gts_id)
 
         # 3. Validate GTS keywords (x-gts-final, x-gts-abstract, placement)
         self._validate_gts_keywords(schema_content)
@@ -765,7 +757,7 @@ class GtsStore:
 
             schema_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
             schema_ref_errors = schema_ref_validator.validate_schema_ref_existence(
-                schema_entity.content
+                schema_entity.content, selected_type_id=schema_id.id
             )
             if schema_ref_errors:
                 raise ValueError(
@@ -775,9 +767,13 @@ class GtsStore:
 
             effective_traits = self._build_effective_traits(schema_id.id)
             trait_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
-            trait_ref_validator.validate_schema_ref_existence(effective_traits.schema)
+            trait_ref_validator.validate_schema_ref_existence(
+                effective_traits.schema, selected_type_id=schema_id.id
+            )
             trait_ref_validator.validate_instance(
-                effective_traits.values, effective_traits.schema
+                effective_traits.values,
+                effective_traits.schema,
+                selected_type_id=schema_id.id,
             )
             xref_ids = (
                 schema_ref_validator.referenced_ids | trait_ref_validator.referenced_ids
@@ -843,6 +839,11 @@ class GtsStore:
         self, schema: Any, include_gts_refs: bool = True
     ) -> Iterator[tuple[str, bool]]:
         x_gts_ref_validator = XGtsRefValidator(mode=GtsRefValidationMode.NONE)
+        selected_type_id = (
+            x_gts_ref_validator.selected_type_id(schema, None)
+            if isinstance(schema, dict)
+            else None
+        )
         for subschema, _path in iter_schema_nodes(schema):
             ref_uri = subschema.get("$ref")
             if isinstance(ref_uri, str):
@@ -853,7 +854,7 @@ class GtsStore:
             if not include_gts_refs:
                 continue
             x_gts_ref = x_gts_ref_validator.resolve_ref_pattern(
-                subschema.get("x-gts-ref"), schema
+                subschema.get("x-gts-ref"), selected_type_id
             )
             if (
                 isinstance(x_gts_ref, str)
@@ -931,7 +932,7 @@ class GtsStore:
 
         x_gts_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
         x_gts_ref_errors = x_gts_ref_validator.validate_instance(
-            content, self._resolve_schema_refs(schema)
+            content, self._resolve_schema_refs(schema), selected_type_id=schema_type.id
         )
         if x_gts_ref_errors:
             error_messages = [

@@ -1,6 +1,6 @@
 """Tests for gts.x_gts_ref (x-gts-ref schema & instance validation, spec sec 9.5)."""
 
-from gts.x_gts_ref import XGtsRefValidator
+from gts.x_gts_ref import X_GTS_REF_SELF, XGtsRefValidator
 
 
 class TestValidateSchema:
@@ -36,32 +36,19 @@ class TestValidateSchema:
     def test_invalid_prefix_value(self):
         errors = XGtsRefValidator().validate_schema({"x-gts-ref": "nope"})
         assert len(errors) == 1
-        assert "must start with" in errors[0].reason
+        assert "must be a GTS identifier" in errors[0].reason
 
-    def test_relative_pointer_resolves_to_valid_id(self):
-        schema = {
-            "$id": "gts.x.test._.foo.v1~",
-            "properties": {
-                "ref_field": {"x-gts-ref": "/$id"},
-            },
-        }
-        errors = XGtsRefValidator().validate_schema(schema)
-        assert errors == []
+    def test_selected_type_self_reference_is_valid(self):
+        validator = XGtsRefValidator()
+        assert validator.is_self_reference(X_GTS_REF_SELF)
+        assert validator.validate_schema({"x-gts-ref": X_GTS_REF_SELF}) == []
 
-    def test_relative_pointer_unresolvable(self):
-        schema = {"properties": {"ref_field": {"x-gts-ref": "/missing/path"}}}
-        errors = XGtsRefValidator().validate_schema(schema)
-        assert len(errors) == 1
-        assert "Cannot resolve reference path" in errors[0].reason
-
-    def test_relative_pointer_resolves_to_invalid_id(self):
-        schema = {
-            "not_gts": "definitely not a gts id !!",
-            "properties": {"ref_field": {"x-gts-ref": "/not_gts"}},
-        }
-        errors = XGtsRefValidator().validate_schema(schema)
-        assert len(errors) == 1
-        assert "is not a valid GTS identifier" in errors[0].reason
+    def test_other_pointers_are_invalid(self):
+        validator = XGtsRefValidator()
+        for pointer in ("/missing/path", "/properties/id"):
+            errors = validator.validate_schema({"x-gts-ref": pointer})
+            assert len(errors) == 1
+            assert "must be a GTS identifier" in errors[0].reason
 
     def test_recurses_into_nested_structures(self):
         schema = {
@@ -114,20 +101,6 @@ class TestValidateSchema:
             "disallow[1]/x-gts-ref",
         ]
 
-    def test_resolves_relative_patterns_before_extracting_subschema(self):
-        root = {
-            "x-gts-traits-schema": {
-                "constraintType": "gts.x.test._.target.v1~",
-                "properties": {
-                    "ref": {"x-gts-ref": "/x-gts-traits-schema/constraintType"}
-                },
-            }
-        }
-        resolved = XGtsRefValidator().resolve_schema_ref_patterns(
-            root["x-gts-traits-schema"], root
-        )
-        assert resolved["properties"]["ref"]["x-gts-ref"] == ("gts.x.test._.target.v1~")
-
 
 class TestValidateSchemaRefExistence:
     def test_missing_concrete_constraint_type_fails(self):
@@ -159,7 +132,6 @@ class TestValidateSchemaRefExistence:
                 "allOf": [
                     {"x-gts-ref": "gts.x.test._.foo.v1~"},
                     {"x-gts-ref": "gts.x.test.*"},
-                    {"x-gts-ref": "/properties/ref"},
                 ]
             }
         )
@@ -176,42 +148,21 @@ class TestValidateSchemaRefExistence:
         )
         assert errors == []
 
-    def test_relative_constraint_type_must_exist(self):
+    def test_selected_type_constraint_uses_explicit_leaf(self):
         class FakeStore:
             def get(self, value):
-                return None
+                return object() if value == "gts.x.test._.leaf.v1~" else None
 
-        schema = {
-            "target": "gts.x.test._.missing.v1~",
-            "properties": {"ref": {"x-gts-ref": "/target"}},
-        }
         errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
-            schema
-        )
-        assert len(errors) == 1
-        assert (
-            "constraint type 'gts.x.test._.missing.v1~' is not registered"
-            in errors[0].reason
-        )
-
-    def test_relative_constraint_type_can_resolve(self):
-        class FakeStore:
-            def get(self, value):
-                return object() if value == "gts.x.test._.target.v1~" else None
-
-        schema = {
-            "target": "gts.x.test._.target.v1~",
-            "properties": {"ref": {"x-gts-ref": "/target"}},
-        }
-        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
-            schema
+            {"x-gts-ref": X_GTS_REF_SELF},
+            selected_type_id="gts.x.test._.leaf.v1~",
         )
         assert errors == []
 
 
 class TestValidateInstanceValue:
     def test_non_string_instance_value_error(self):
-        error = XGtsRefValidator()._validate_ref_value(123, "gts.*", "ref", {})
+        error = XGtsRefValidator()._validate_ref_value(123, "gts.*", "ref", None)
         assert error is not None
         assert "Value must be a string" in error.reason
 
@@ -226,17 +177,24 @@ class TestValidateInstanceValue:
         )
         assert errors == []
 
-    def test_relative_ref_pattern_resolution_fails_when_not_gts_prefix(self):
+    def test_self_reference_uses_explicit_selected_leaf(self):
         schema = {
-            "other": "not-gts-value",
+            "$id": "gts.x.test._.base.v1~",
             "type": "object",
-            "properties": {"ref": {"x-gts-ref": "/other"}},
+            "properties": {"ref": {"x-gts-ref": X_GTS_REF_SELF}},
         }
+        leaf = "gts.x.test._.base.v1~x.test._.leaf.v1~"
+        assert (
+            XGtsRefValidator().validate_instance(
+                {"ref": leaf}, schema, selected_type_id=leaf
+            )
+            == []
+        )
         errors = XGtsRefValidator().validate_instance(
-            {"ref": "gts.x.test._.foo.v1~"}, schema
+            {"ref": "gts.x.test._.base.v1~"}, schema, selected_type_id=leaf
         )
         assert len(errors) == 1
-        assert "is not a GTS pattern" in errors[0].reason
+        assert "does not match pattern" in errors[0].reason
 
     def test_wildcard_pattern_matches_prefix(self):
         errors = XGtsRefValidator().validate_instance(

@@ -1,9 +1,7 @@
 """Tests for gts.ops.GtsOps (the high-level CLI/HTTP operations facade)."""
 
 import pytest
-
 from gts.ops import GtsOps
-
 
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -144,15 +142,15 @@ class TestAddEntity:
         assert result.ok is True
         assert len(result.results) == 2
 
-    def test_add_entities_defers_relative_pointer_resolution(self, ops):
+    def test_add_entities_rejects_unsupported_x_gts_ref_pointer(self, ops):
         schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "$id": "gts://gts.x.test._.relative.v1~",
             "properties": {"ref": {"x-gts-ref": "/missing"}},
         }
         result = ops.add_entities([schema])
-        assert result.ok is True
-        assert ops.validate_schema("gts.x.test._.relative.v1~").ok is False
+        assert result.ok is False
+        assert "must be a GTS identifier" in result.results[0].error
 
 
 class TestAddSchemaLegacy:

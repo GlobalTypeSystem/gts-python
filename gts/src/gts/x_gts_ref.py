@@ -5,7 +5,7 @@ This module implements validation for the x-gts-ref extension as specified
 in the GTS specification section 9.5.
 
 Key optimizations:
-1. Use jsonpointer library for JSON Pointer resolution
+1. Resolve local JSON Schema $ref pointers during traversal
 2. Consolidate duplicate validation logic
 3. Simplify recursive traversal with a generic walker
 """
@@ -16,12 +16,13 @@ from typing import Any
 
 from jsonschema.validators import validator_for
 
-from ._json_pointer import MISSING
 from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import GTS_PREFIX, strip_scheme
 from .gts import GtsID, GtsWildcard
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_validation import iter_schema_nodes, map_schema_nodes
+
+X_GTS_REF_SELF = "/$id"
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
@@ -96,8 +97,23 @@ class XGtsRefValidator:
         self.referenced_ids: set[str] = set()
         self.referenced_wildcard_patterns: set[str] = set()
 
+    @staticmethod
+    def is_self_reference(value: Any) -> bool:
+        return value == X_GTS_REF_SELF
+
+    @staticmethod
+    def selected_type_id(
+        schema: dict[str, Any], selected_type_id: str | None
+    ) -> str | None:
+        candidate = selected_type_id or schema.get("$id")
+        return strip_scheme(candidate) if isinstance(candidate, str) else None
+
     def validate_instance(
-        self, instance: dict[str, Any], schema: dict[str, Any], instance_path: str = ""
+        self,
+        instance: dict[str, Any],
+        schema: dict[str, Any],
+        instance_path: str = "",
+        selected_type_id: str | None = None,
     ) -> list[XGtsRefValidationError]:
         """
         Validate an instance against x-gts-ref constraints in schema.
@@ -111,6 +127,7 @@ class XGtsRefValidator:
             List of validation errors (empty if valid)
         """
         errors: list[XGtsRefValidationError] = []
+        selected_type_id = self.selected_type_id(schema, selected_type_id)
 
         def resolve_local_ref(ref: str) -> Any | None:
             if ref != "#" and not ref.startswith("#/"):
@@ -130,7 +147,9 @@ class XGtsRefValidator:
                     visit_instance(inst, target, path, errs, refs | {ref})
 
             if "x-gts-ref" in sch and isinstance(inst, str):
-                error = self._validate_ref_value(inst, sch["x-gts-ref"], path, schema)
+                error = self._validate_ref_value(
+                    inst, sch["x-gts-ref"], path, selected_type_id
+                )
                 if error:
                     errs.append(error)
 
@@ -243,29 +262,15 @@ class XGtsRefValidator:
         return errors
 
     def validate_schema(
-        self,
-        schema: dict[str, Any],
-        schema_path: str = "",
-        root_schema: dict[str, Any] | None = None,
-        resolve_relative: bool = True,
+        self, schema: dict[str, Any], schema_path: str = ""
     ) -> list[XGtsRefValidationError]:
         """Validate x-gts-ref fields in a schema definition."""
-        if root_schema is None:
-            root_schema = schema
-
         errors = []
         for subschema, path in iter_schema_nodes(schema, schema_path):
             if "x-gts-ref" not in subschema:
                 continue
-            ref_value = subschema["x-gts-ref"]
-            if (
-                not resolve_relative
-                and isinstance(ref_value, str)
-                and ref_value.startswith("/")
-            ):
-                continue
             ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
-            error = self._validate_ref_pattern(ref_value, ref_path, root_schema)
+            error = self._validate_ref_pattern(subschema["x-gts-ref"], ref_path)
             if error:
                 errors.append(error)
         return errors
@@ -274,13 +279,12 @@ class XGtsRefValidator:
         self,
         schema: Any,
         schema_path: str = "",
-        root_schema: dict[str, Any] | None = None,
+        selected_type_id: str | None = None,
     ) -> list[XGtsRefValidationError]:
         if self.store is None or self.mode == GtsRefValidationMode.NONE:
             return []
         store = self.store
-        if root_schema is None:
-            root_schema = schema
+        selected_type_id = self.selected_type_id(schema, selected_type_id)
 
         def matches(pattern: str) -> list[str]:
             wildcard = GtsWildcard(pattern)
@@ -296,7 +300,7 @@ class XGtsRefValidator:
         errors: list[XGtsRefValidationError] = []
         for subschema, path in iter_schema_nodes(schema, schema_path):
             ref_pattern = subschema.get("x-gts-ref")
-            resolved = self.resolve_ref_pattern(ref_pattern, root_schema)
+            resolved = self.resolve_ref_pattern(ref_pattern, selected_type_id)
             if not isinstance(resolved, str) or not resolved.startswith(GTS_PREFIX):
                 continue
             ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
@@ -326,32 +330,20 @@ class XGtsRefValidator:
         return errors
 
     def resolve_ref_pattern(
-        self, ref_pattern: Any, root_schema: dict[str, Any]
+        self, ref_pattern: Any, selected_type_id: str | None
     ) -> str | None:
         if not isinstance(ref_pattern, str):
             return None
-        if ref_pattern.startswith("/"):
-            return self._resolve_pointer(root_schema, ref_pattern)
+        if self.is_self_reference(ref_pattern):
+            return selected_type_id
         return strip_scheme(ref_pattern)
 
-    def resolve_schema_ref_patterns(
-        self, schema: Any, root_schema: dict[str, Any]
-    ) -> Any:
-        def resolve(node: Any) -> Any:
-            if not isinstance(node, dict):
-                return node
-            ref_pattern = node.get("x-gts-ref")
-            if not isinstance(ref_pattern, str) or not ref_pattern.startswith("/"):
-                return node
-            resolved_pattern = self.resolve_ref_pattern(ref_pattern, root_schema)
-            if resolved_pattern is not None:
-                node["x-gts-ref"] = resolved_pattern
-            return node
-
-        return map_schema_nodes(schema, resolve)
-
     def _validate_ref_value(
-        self, value: str, ref_pattern: str, field_path: str, schema: dict[str, Any]
+        self,
+        value: str,
+        ref_pattern: str,
+        field_path: str,
+        selected_type_id: str | None,
     ) -> XGtsRefValidationError | None:
         """
         Validate an instance value against its x-gts-ref constraint.
@@ -360,7 +352,7 @@ class XGtsRefValidator:
             value: The field value to validate
             ref_pattern: The x-gts-ref pattern
             field_path: Path to the field (for error reporting)
-            schema: The complete schema (for resolving relative refs)
+            selected_type_id: Canonical identifier of the selected leaf type
 
         Returns:
             XGtsRefValidationError if validation fails, None otherwise
@@ -373,32 +365,21 @@ class XGtsRefValidator:
                 f"Value must be a string, got {type(value).__name__}",
             )
 
-        # Resolve pattern if it's a relative reference
-        if ref_pattern.startswith("/"):
-            resolved_pattern = self._resolve_pointer(schema, ref_pattern)
-            if resolved_pattern is None:
+        if self.is_self_reference(ref_pattern):
+            if selected_type_id is None:
                 return XGtsRefValidationError(
                     field_path,
                     value,
                     ref_pattern,
-                    f"Cannot resolve reference path '{ref_pattern}'",
+                    "Cannot resolve /$id without a selected GTS Type Schema",
                 )
-            if not isinstance(resolved_pattern, str) or not resolved_pattern.startswith(
-                "gts."
-            ):
-                return XGtsRefValidationError(
-                    field_path,
-                    value,
-                    ref_pattern,
-                    f"Resolved reference '{ref_pattern}' -> '{resolved_pattern}' is not a GTS pattern",
-                )
-            ref_pattern = resolved_pattern
+            ref_pattern = selected_type_id
 
         # Validate against GTS pattern
         return self._validate_gts_pattern(value, ref_pattern, field_path)
 
     def _validate_ref_pattern(
-        self, ref_pattern: str, field_path: str, root_schema: dict[str, Any]
+        self, ref_pattern: str, field_path: str
     ) -> XGtsRefValidationError | None:
         """
         Validate an x-gts-ref pattern in a schema definition.
@@ -406,7 +387,6 @@ class XGtsRefValidator:
         Args:
             ref_pattern: The x-gts-ref value
             field_path: Path to the field (for error reporting)
-            root_schema: The root schema (for resolving relative refs)
 
         Returns:
             XGtsRefValidationError if validation fails, None otherwise
@@ -423,30 +403,14 @@ class XGtsRefValidator:
         if ref_pattern.startswith(GTS_PREFIX):
             return self._validate_gts_id_or_pattern(ref_pattern, field_path)
 
-        # Case 2: Relative reference
-        if ref_pattern.startswith("/"):
-            resolved = self._resolve_pointer(root_schema, ref_pattern)
-            if resolved is None:
-                return XGtsRefValidationError(
-                    field_path,
-                    ref_pattern,
-                    ref_pattern,
-                    f"Cannot resolve reference path '{ref_pattern}'",
-                )
-            if not isinstance(resolved, str) or not GtsID.is_valid(resolved):
-                return XGtsRefValidationError(
-                    field_path,
-                    ref_pattern,
-                    ref_pattern,
-                    f"Resolved reference '{ref_pattern}' -> '{resolved}' is not a valid GTS identifier",
-                )
+        if self.is_self_reference(ref_pattern):
             return None
 
         return XGtsRefValidationError(
             field_path,
             ref_pattern,
             ref_pattern,
-            f"Invalid x-gts-ref value: '{ref_pattern}' must start with 'gts.' or '/'",
+            f"Invalid x-gts-ref value: '{ref_pattern}' must be a GTS identifier, wildcard, or '{X_GTS_REF_SELF}'",
         )
 
     def _validate_gts_id_or_pattern(
@@ -529,34 +493,5 @@ class XGtsRefValidator:
                     f"Referenced entity '{value}' not found in registry",
                 )
             self.referenced_ids.add(value)
-
-        return None
-
-    def _resolve_pointer(self, schema: dict[str, Any], pointer: str) -> str | None:
-        """
-        Resolve a JSON Pointer in the schema to a GTS identifier.
-
-        Args:
-            schema: The schema to search
-            pointer: JSON Pointer (e.g., "/$id", "/properties/type")
-
-        Returns:
-            The resolved GTS identifier (bare form) or None if not found.
-        """
-        current = resolve_json_pointer(schema, pointer, default=MISSING)
-        if current is MISSING or current is None:
-            return None
-
-        # If current is a string, return it (normalized to the bare form).
-        if isinstance(current, str):
-            return strip_scheme(current)
-
-        # If current is a dict with x-gts-ref, resolve it
-        if isinstance(current, dict) and "x-gts-ref" in current:
-            ref_value = current["x-gts-ref"]
-            if isinstance(ref_value, str):
-                if ref_value.startswith("/"):
-                    return self._resolve_pointer(schema, ref_value)
-                return strip_scheme(ref_value)
 
         return None
