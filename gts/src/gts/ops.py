@@ -24,7 +24,7 @@ def _normalize_gts_ref_validation(value: Any) -> GtsRefValidationMode:
     try:
         return GtsRefValidationMode(value)
     except (TypeError, ValueError):
-        return GtsRefValidationMode.FULL
+        return GtsRefValidationMode.ANY_VALID
 
 
 @dataclass
@@ -397,7 +397,7 @@ class GtsOps:
         self,
         content: dict[str, Any],
         validate: bool = False,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> GtsAddEntityResult:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         entity = GtsEntity(content=content, cfg=self.cfg)
@@ -671,7 +671,7 @@ class GtsOps:
     def validate_instance(
         self,
         gts_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> GtsValidationResult:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         try:
@@ -683,7 +683,7 @@ class GtsOps:
     def validate_schema(
         self,
         gts_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> GtsValidationResult:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         try:
@@ -695,7 +695,7 @@ class GtsOps:
     def validate_entity(
         self,
         gts_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> GtsEntityValidationResult:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         entity = self.store.get(gts_id)

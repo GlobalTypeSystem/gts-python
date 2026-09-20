@@ -3,5 +3,5 @@ from enum import Enum
 
 class GtsRefValidationMode(str, Enum):
     NONE = "none"
-    PRESENCE = "presence"
-    FULL = "full"
+    ANY_PRESENT = "any-present"
+    ANY_VALID = "any-valid"

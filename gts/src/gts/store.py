@@ -612,7 +612,7 @@ class GtsStore:
         gts_id: str,
         is_abstract: bool,
         transient_schema: dict[str, Any] | None = None,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate OP#13: schema traits for a type."""
         effective = self._build_effective_traits(gts_id, transient_schema)
@@ -673,7 +673,7 @@ class GtsStore:
         self,
         gts_id: str,
         schema_content: dict[str, Any],
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate a schema using the registry only for its dependencies."""
         schema_id = _require_schema_id(gts_id)
@@ -722,7 +722,7 @@ class GtsStore:
     def validate_schema(
         self,
         gts_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate a registered schema and all of its dependencies."""
         self._validate_schema_transitive(gts_id, set(), set(), gts_ref_validation)
@@ -782,7 +782,7 @@ class GtsStore:
                 schema_ref_validator.referenced_wildcard_patterns
                 | trait_ref_validator.referenced_wildcard_patterns
             )
-            if gts_ref_validation is GtsRefValidationMode.FULL:
+            if gts_ref_validation is GtsRefValidationMode.ANY_VALID:
                 for dependency_id in xref_ids:
                     try:
                         self._validate_entity_transitive(
@@ -907,7 +907,7 @@ class GtsStore:
         self,
         content: dict[str, Any],
         type_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> set[str]:
         """Validate unregistered instance content against a registered type schema."""
         schema_type = _require_schema_id(type_id)
@@ -946,7 +946,7 @@ class GtsStore:
     def validate_instance(
         self,
         gts_id: str,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate an object instance and its complete dependency closure."""
         self._validate_instance_transitive(gts_id, set(), set(), gts_ref_validation)
@@ -981,7 +981,7 @@ class GtsStore:
                     f"Instance type '{obj.type_id}' is invalid: {error}"
                 ) from error
 
-            if gts_ref_validation is GtsRefValidationMode.FULL:
+            if gts_ref_validation is GtsRefValidationMode.ANY_VALID:
                 for dependency_id in referenced_ids:
                     try:
                         self._validate_entity_transitive(

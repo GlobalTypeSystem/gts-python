@@ -80,18 +80,18 @@ class XGtsRefValidator:
     def __init__(
         self,
         store: Any | None = None,
-        mode: GtsRefValidationMode | bool | str = GtsRefValidationMode.FULL,
+        mode: GtsRefValidationMode | bool | str = GtsRefValidationMode.ANY_VALID,
         *,
         enforce_existence: bool | None = None,
     ):
         if enforce_existence is not None:
             mode = (
-                GtsRefValidationMode.PRESENCE
+                GtsRefValidationMode.ANY_PRESENT
                 if enforce_existence
                 else GtsRefValidationMode.NONE
             )
         elif isinstance(mode, bool):
-            mode = GtsRefValidationMode.PRESENCE if mode else GtsRefValidationMode.NONE
+            mode = GtsRefValidationMode.ANY_PRESENT if mode else GtsRefValidationMode.NONE
         self.store = store
         self.mode = GtsRefValidationMode(mode)
         self.referenced_ids: set[str] = set()

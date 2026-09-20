@@ -57,7 +57,7 @@ class EffectiveTraits:
         self,
         check_unresolved: bool,
         reference_store: Any | None = None,
-        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.FULL,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
         selected_type_id: str | None = None,
     ) -> list[str]:
         """Return a list of error strings (empty means valid)."""

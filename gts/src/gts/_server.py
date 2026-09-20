@@ -17,7 +17,7 @@ from .gts_ref_validation import GtsRefValidationMode
 
 logger = logging.getLogger(__name__)
 GTS_REF_VALIDATION_QUERY = Query(
-    GtsRefValidationMode.FULL, alias="gts-ref-validation"
+    GtsRefValidationMode.ANY_VALID, alias="gts-ref-validation"
 )
 
 
