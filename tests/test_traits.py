@@ -1,6 +1,7 @@
 """Tests for gts.traits (OP#13 schema traits validation)."""
 
 from gts._json_pointer import resolve
+from gts.schema_validation import map_schema_nodes
 from gts.traits import (
     build_effective_traits,
     build_effective_traits_schema,
@@ -9,6 +10,26 @@ from gts.traits import (
     inline_local_pointers,
     merge_rfc7396_into,
 )
+
+
+class TestSchemaTraversal:
+    def test_maps_draft3_schema_forms_only(self):
+        schema = {
+            "extends": {"required": ["extended"]},
+            "type": ["object", {"required": ["typed"]}],
+            "disallow": ["array", {"required": ["disallowed"]}],
+            "const": {"required": ["data"]},
+        }
+        mapped = map_schema_nodes(
+            schema,
+            lambda node: {k: v for k, v in node.items() if k != "required"},
+        )
+        assert mapped == {
+            "extends": {},
+            "type": ["object", {}],
+            "disallow": ["array", {}],
+            "const": {"required": ["data"]},
+        }
 
 
 class TestCollection:
@@ -221,6 +242,59 @@ class TestBuildEffectiveTraits:
         errors = effective.validate(check_unresolved=False)
         assert errors == []
 
+    def test_abstract_validates_provided_trait_values(self):
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+        }
+        effective = build_effective_traits([schema], {"a": 5}, None)
+        errors = effective.validate(check_unresolved=False)
+        assert any("is not of type 'string'" in error for error in errors)
+
+    def test_abstract_preserves_required_in_const_value(self):
+        schema = {
+            "type": "object",
+            "properties": {"config": {"const": {"required": ["a"]}}},
+            "required": ["missing"],
+        }
+        effective = build_effective_traits(
+            [schema], {"config": {"required": ["a"]}}, None
+        )
+        assert effective.validate(check_unresolved=False) == []
+
+    def test_abstract_skips_required_in_nested_dialect_schema(self):
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                    "required": ["missing"],
+                }
+            ],
+        }
+        effective = build_effective_traits([schema], {}, None)
+        assert effective.validate(check_unresolved=False) == []
+
+    def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
+        class FakeStore:
+            def get(self, value):
+                return None
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "ref": {"type": "string", "x-gts-ref": "gts.x.test._.foo.v1~"}
+            },
+        }
+        errors = build_effective_traits([schema], {}, None).validate(
+            check_unresolved=False, reference_store=FakeStore()
+        )
+        assert any(
+            "constraint type 'gts.x.test._.foo.v1~' is not registered" in e
+            for e in errors
+        )
+
     def test_incompatible_trait_schema_chain_flagged(self):
         # Second schema narrows type incompatibly with the ancestor.
         effective = build_effective_traits(
@@ -238,7 +312,10 @@ class TestBuildEffectiveTraits:
         effective = build_effective_traits(
             [{"type": "object"}], {}, "https://json-schema.org/draft/2020-12/schema"
         )
-        assert effective.schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+        assert (
+            effective.schema["$schema"]
+            == "https://json-schema.org/draft/2020-12/schema"
+        )
 
     def test_x_gts_ref_errors_prefixed(self):
         schema = {

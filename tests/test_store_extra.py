@@ -1,17 +1,18 @@
 """Additional coverage-focused tests for gts.store.GtsStore."""
 
-import pytest
-from typing import Iterator, Optional
+from collections.abc import Iterator
+from typing import Optional
 
+import pytest
+from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
+from gts.gts import GtsID
+from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 from gts.store import (
-    GtsStore,
     GtsReader,
+    GtsStore,
     StoreGtsEntityNotFound,
     StoreGtsObjectNotFound,
 )
-from gts.entities import GtsEntity, DEFAULT_GTS_CONFIG
-from gts.gts import GtsID
-from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 
 
 class MockGtsReader(GtsReader):
@@ -108,6 +109,77 @@ class TestValidateSchemaRefs:
                 {"allOf": [{"$ref": "http://example.com/schema"}]}
             )
 
+    def test_registered_gts_ref_target_resolves(self):
+        target = _schema_entity("gts.x.test._.target.v1~")
+        store = GtsStore(MockGtsReader([target]))
+        store._validate_schema_ref_targets(
+            {"allOf": [{"$ref": "gts://gts.x.test._.target.v1~"}]}
+        )
+
+    def test_non_schema_gts_ref_target_raises(self):
+        target_id = "gts.x.test._.target.v1~"
+        target = GtsEntity(
+            content={"$id": target_id}, gts_id=GtsID(target_id), is_schema=False
+        )
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets({"$ref": f"gts://{target_id}"})
+
+    def test_transitive_missing_gts_ref_target_raises(self):
+        target = _schema_entity(
+            "gts.x.test._.target.v1~",
+            {"$ref": "gts://gts.x.test._.missing.v1~"},
+        )
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {"$ref": "gts://gts.x.test._.target.v1~"}
+            )
+
+    def test_missing_gts_ref_target_raises(self):
+        store = GtsStore(reader=None)
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {"allOf": [{"$ref": "gts://gts.x.test._.missing.v1~"}]}
+            )
+
+    def test_missing_derived_gts_ref_target_raises(self):
+        target = _schema_entity("gts.x.test._.target.v1~")
+        store = GtsStore(MockGtsReader([target]))
+        with pytest.raises(ValueError, match="Unresolvable \\$ref"):
+            store._validate_schema_ref_targets(
+                {"$ref": ("gts://gts.x.test._.target.v1~x.test._.missing.v1~")}
+            )
+
+
+class TestSchemaDependencies:
+    def test_ignores_x_gts_ref_in_annotation_data(self):
+        store = GtsStore(reader=None)
+        assert (
+            list(
+                store._schema_dependencies(
+                    {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
+                )
+            )
+            == []
+        )
+
+    def test_finds_constraint_under_property_named_x_gts_ref(self):
+        store = GtsStore(reader=None)
+        assert list(
+            store._schema_dependencies(
+                {"properties": {"x-gts-ref": {"x-gts-ref": "gts.x.test._.missing.v1~"}}}
+            )
+        ) == [("gts.x.test._.missing.v1~", True)]
+
+    def test_unsupported_x_gts_ref_pointer_is_not_a_dependency(self):
+        store = GtsStore(reader=None)
+        schema = {
+            "target": "gts.x.test._.target.v1~",
+            "properties": {"ref": {"x-gts-ref": "/target"}},
+        }
+        assert list(store._schema_dependencies(schema)) == []
+
 
 class TestValidateGtsKeywords:
     def test_final_must_be_bool(self):
@@ -133,6 +205,11 @@ class TestValidateGtsKeywords:
     def test_valid_top_level_keywords_pass(self):
         GtsStore._validate_gts_keywords({"x-gts-final": True})
         GtsStore._validate_gts_keywords({"x-gts-abstract": True})
+
+    def test_extension_shaped_annotation_data_is_ignored(self):
+        GtsStore._validate_gts_keywords(
+            {"const": {"x-gts-final": True, "x-gts-unknown": True}}
+        )
 
     def test_content_is_abstract_and_final(self):
         assert GtsStore._content_is_abstract({"x-gts-abstract": True}) is True
@@ -169,6 +246,22 @@ class TestValidateSchemaXGtsRefs:
         store.register(schema)
         with pytest.raises(Exception, match="x-gts-ref validation failed"):
             store._validate_schema_x_gts_refs("gts.x.test._.foo.v1~")
+
+    def test_basic_validation_rejects_unsupported_pointer(self):
+        schema = _schema_entity(
+            "gts.x.test._.foo.v1~",
+            {
+                "x-gts-traits-schema": {
+                    "properties": {
+                        "ref": {"x-gts-ref": "/x-gts-traits-schema/missingTarget"}
+                    }
+                }
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        with pytest.raises(Exception, match="must be a GTS identifier"):
+            store.validate_schema_basic("gts.x.test._.foo.v1~")
 
 
 class TestValidateSchemaChain:

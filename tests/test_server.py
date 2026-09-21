@@ -75,6 +75,15 @@ class TestHandlers:
         resp = run(server.add_entity(body={"no": "id"}, validate=False))
         assert resp.status_code == 422
 
+    def test_add_entity_validation_alias(self, server):
+        schema = {
+            **SCHEMA,
+            "$id": "gts://gts.x.test._.relative.v1~",
+            "properties": {"ref": {"x-gts-ref": "/missing"}},
+        }
+        resp = run(server.add_entity(body=schema, validate=False, validation=True))
+        assert resp.status_code == 422
+
     def test_add_changed_entity_conflict(self, server):
         assert run(server.add_entity(body=SCHEMA, validate=False)).status_code == 200
         changed_schema = {**SCHEMA, "properties": {"name": {"type": "integer"}}}

@@ -26,7 +26,7 @@ $(error PYTHON must be set for local package targets (examples: venv: PYTHON=.ve
 endif
 endif
 
-.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec e2e coverage
+.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec e2e coverage gts-server
 
 # Default target - show help
 .DEFAULT_GOAL := help
@@ -100,6 +100,11 @@ lint: py-env
 clippy: py-env
 	$(PYTHON) -m ruff check --fix gts/src
 
+# Format code and apply auto-fixable lint corrections
+fix: py-env
+	$(PYTHON) -m ruff format gts/src
+	$(PYTHON) -m ruff check --fix gts/src
+
 # Run type checker
 mypy: py-env
 	$(PYTHON) -m mypy gts/src/gts --ignore-missing-imports
@@ -114,6 +119,11 @@ test: install
 coverage: install
 	$(PYTHON) -m pip install 'pytest-cov>=5,<7'
 	$(PYTHON) -m pytest tests/ --cov=gts --cov-report=xml --cov-report=term
+
+PORT ?= 8000
+
+gts-server: install
+	$(PYTHON) -m gts server --host 127.0.0.1 --port $(PORT)
 
 # Run end-to-end tests against gts-spec
 e2e: install

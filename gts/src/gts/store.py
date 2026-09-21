@@ -14,8 +14,9 @@ from . import compatibility, derivation, traits
 from ._naming import looks_like_gts, strip_scheme, with_scheme
 from .entities import GtsEntity
 from .gts import GtsID, GtsRef, GtsWildcard
+from .gts_ref_validation import GtsRefValidationMode
 from .schema_cast import GtsEntityCastResult
-from .schema_validation import FORMAT_CHECKER, validator_for
+from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ class GtsStore:
     def get_schema_content(self, type_id: str) -> dict[str, Any]:
         """Get schema content as dict (legacy method for backward compatibility)."""
         entity = self.get(type_id)
-        if entity and isinstance(entity.content, dict):
+        if entity and entity.is_schema and isinstance(entity.content, dict):
             return entity.content
         raise KeyError(f"Schema not found: {type_id}")
 
@@ -295,6 +296,33 @@ class GtsStore:
                 nested_path = f"{path}[{idx}]"
                 GtsStore._validate_schema_refs(item, nested_path)
 
+    def _validate_schema_ref_targets(
+        self, schema: Any, path: str = "", visited: set[str] | None = None
+    ) -> None:
+        visited = visited if visited is not None else set()
+        if isinstance(schema, dict):
+            ref_uri = schema.get("$ref")
+            if isinstance(ref_uri, str):
+                ref = GtsRef.parse(ref_uri)
+                if not ref.is_local and ref.is_gts and ref.has_scheme:
+                    current_path = f"{path}.$ref" if path else "$ref"
+                    try:
+                        target = self.get_schema_content(ref.target_id)
+                    except KeyError as error:
+                        raise ValueError(
+                            f"Unresolvable $ref at '{current_path}': '{ref_uri}'"
+                        ) from error
+                    if ref.target_id not in visited:
+                        visited.add(ref.target_id)
+                        self._validate_schema_ref_targets(target, current_path, visited)
+            for key, value in schema.items():
+                if key != "$ref":
+                    nested_path = f"{path}.{key}" if path else key
+                    self._validate_schema_ref_targets(value, nested_path, visited)
+        elif isinstance(schema, list):
+            for index, item in enumerate(schema):
+                self._validate_schema_ref_targets(item, f"{path}[{index}]", visited)
+
     def _validate_schema_x_gts_refs(self, gts_id: str) -> None:
         """
         Validate a schema's x-gts-ref fields.
@@ -340,15 +368,6 @@ class GtsStore:
         }
         supported_keywords = top_level_keywords | {"x-gts-ref"}
 
-        def _contains_key_recursive(value: Any, key: str) -> bool:
-            if isinstance(value, dict):
-                if key in value:
-                    return True
-                return any(_contains_key_recursive(v, key) for v in value.values())
-            elif isinstance(value, list):
-                return any(_contains_key_recursive(v, key) for v in value)
-            return False
-
         # Validate x-gts-final
         final_val = content.get("x-gts-final")
         if final_val is not None and not isinstance(final_val, bool):
@@ -369,26 +388,19 @@ class GtsStore:
                 "schema cannot declare both x-gts-final and x-gts-abstract as true"
             )
 
-        def _validate_extensions(value: Any) -> None:
-            if isinstance(value, dict):
-                for key, nested_value in value.items():
-                    if key.startswith("x-gts-") and key not in supported_keywords:
-                        raise ValueError(f"Unsupported GTS extension keyword: {key}")
-                    _validate_extensions(nested_value)
-            elif isinstance(value, list):
-                for item in value:
-                    _validate_extensions(item)
-
-        _validate_extensions(content)
+        for schema_node, _ in iter_schema_nodes(content):
+            for key in schema_node:
+                if key.startswith("x-gts-") and key not in supported_keywords:
+                    raise ValueError(f"Unsupported GTS extension keyword: {key}")
 
         # Check that x-gts-final/x-gts-abstract/x-gts-traits/x-gts-traits-schema
-        # appear only at the top level
-        for key, value in content.items():
-            if key in top_level_keywords:
+        # appear only at the top level.
+        for schema_node, path in iter_schema_nodes(content):
+            if not path:
                 continue
-            for kw in top_level_keywords:
-                if _contains_key_recursive(value, kw):
-                    raise ValueError(f"{kw} must be at the schema top level")
+            for keyword in top_level_keywords:
+                if keyword in schema_node:
+                    raise ValueError(f"{keyword} must be at the schema top level")
 
     @staticmethod
     def _content_is_abstract(content: dict[str, Any]) -> bool:
@@ -600,11 +612,15 @@ class GtsStore:
         gts_id: str,
         is_abstract: bool,
         transient_schema: dict[str, Any] | None = None,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate OP#13: schema traits for a type."""
         effective = self._build_effective_traits(gts_id, transient_schema)
         errors = effective.validate(
-            check_unresolved=not is_abstract, reference_store=self
+            check_unresolved=not is_abstract,
+            reference_store=self,
+            gts_ref_validation=gts_ref_validation,
+            selected_type_id=gts_id,
         )
         if errors:
             raise ValueError(
@@ -654,7 +670,10 @@ class GtsStore:
         self._validate_gts_keywords(schema_content)
 
     def validate_schema_content(
-        self, gts_id: str, schema_content: dict[str, Any]
+        self,
+        gts_id: str,
+        schema_content: dict[str, Any],
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
         """Validate a schema using the registry only for its dependencies."""
         schema_id = _require_schema_id(gts_id)
@@ -671,6 +690,7 @@ class GtsStore:
 
         logger.info(f"Validating schema {schema_id.id}")
         self._validate_schema_refs(schema_content, "")
+        self._validate_schema_ref_targets(schema_content)
         self._validate_schema_x_gts_refs_content(schema_id.id, schema_content)
         self._validate_gts_keywords(schema_content)
         self._validate_schema_chain(schema_id.id, schema_content)
@@ -696,11 +716,28 @@ class GtsStore:
             schema_id.id,
             self._content_is_abstract(schema_content),
             schema_content,
+            gts_ref_validation,
         )
 
-    def validate_schema(self, gts_id: str) -> None:
+    def validate_schema(
+        self,
+        gts_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
+    ) -> None:
         """Validate a registered schema and all of its dependencies."""
+        self._validate_schema_transitive(gts_id, set(), set(), gts_ref_validation)
+
+    def _validate_schema_transitive(
+        self,
+        gts_id: str,
+        visiting: set[str],
+        validated: set[str],
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> None:
         schema_id = _require_schema_id(gts_id)
+        key = f"schema:{schema_id.id}"
+        if key in validated or key in visiting:
+            return
 
         schema_entity = self.get(schema_id.id)
         if not schema_entity:
@@ -711,9 +748,167 @@ class GtsStore:
             raise ValueError(  # noqa: TRY004 - keep ValueError for API compatibility
                 f"Schema '{schema_id.id}' content must be a dictionary"
             )
-        self.validate_schema_content(schema_id.id, schema_entity.content)
 
-    def validate_instance_content(self, content: dict[str, Any], type_id: str) -> None:
+        visiting.add(key)
+        try:
+            self.validate_schema_content(
+                schema_id.id, schema_entity.content, gts_ref_validation
+            )
+
+            schema_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
+            schema_ref_errors = schema_ref_validator.validate_schema_ref_existence(
+                schema_entity.content, selected_type_id=schema_id.id
+            )
+            if schema_ref_errors:
+                raise ValueError(
+                    "x-gts-ref validation failed: "
+                    + "; ".join(error.reason for error in schema_ref_errors)
+                )
+
+            effective_traits = self._build_effective_traits(schema_id.id)
+            trait_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
+            trait_ref_validator.validate_schema_ref_existence(
+                effective_traits.schema, selected_type_id=schema_id.id
+            )
+            trait_ref_validator.validate_instance(
+                effective_traits.values,
+                effective_traits.schema,
+                selected_type_id=schema_id.id,
+            )
+            xref_ids = (
+                schema_ref_validator.referenced_ids | trait_ref_validator.referenced_ids
+            )
+            wildcard_patterns = (
+                schema_ref_validator.referenced_wildcard_patterns
+                | trait_ref_validator.referenced_wildcard_patterns
+            )
+            if gts_ref_validation is GtsRefValidationMode.ANY_VALID:
+                for dependency_id in xref_ids:
+                    try:
+                        self._validate_entity_transitive(
+                            dependency_id, visiting, validated, gts_ref_validation
+                        )
+                    except Exception as error:
+                        raise ValueError(
+                            f"Referenced x-gts-ref entity '{dependency_id}' is invalid: {error}"
+                        ) from error
+                for pattern in wildcard_patterns:
+                    if not self._has_valid_wildcard_match(
+                        pattern, visiting, validated, gts_ref_validation
+                    ):
+                        raise ValueError(
+                            f"x-gts-ref wildcard constraint '{pattern}' has no valid registered match"
+                        )
+
+            chain_ids: list[str] = []
+            prefix = "gts."
+            for segment in schema_id.gts_id_segments:
+                chain_ids.append(prefix + segment.segment)
+                prefix += segment.segment
+            for ancestor_id in chain_ids[:-1]:
+                try:
+                    self._validate_schema_transitive(
+                        ancestor_id, visiting, validated, gts_ref_validation
+                    )
+                except Exception as error:
+                    raise ValueError(
+                        f"Ancestor type '{ancestor_id}' is invalid: {error}"
+                    ) from error
+
+            for dependency_id, dependency_is_type in self._schema_dependencies(
+                schema_entity.content, include_gts_refs=False
+            ):
+                try:
+                    if dependency_is_type:
+                        self._validate_schema_transitive(
+                            dependency_id, visiting, validated, gts_ref_validation
+                        )
+                    else:
+                        self._validate_entity_transitive(
+                            dependency_id, visiting, validated, gts_ref_validation
+                        )
+                except Exception as error:
+                    raise ValueError(
+                        f"Referenced entity '{dependency_id}' is invalid: {error}"
+                    ) from error
+        finally:
+            visiting.remove(key)
+        validated.add(key)
+
+    def _schema_dependencies(
+        self, schema: Any, include_gts_refs: bool = True
+    ) -> Iterator[tuple[str, bool]]:
+        x_gts_ref_validator = XGtsRefValidator(mode=GtsRefValidationMode.NONE)
+        selected_type_id = (
+            x_gts_ref_validator.selected_type_id(schema, None)
+            if isinstance(schema, dict)
+            else None
+        )
+        for subschema, _path in iter_schema_nodes(schema):
+            ref_uri = subschema.get("$ref")
+            if isinstance(ref_uri, str):
+                ref = GtsRef.parse(ref_uri)
+                if not ref.is_local and ref.is_gts and ref.has_scheme:
+                    yield ref.target_id, True
+
+            if not include_gts_refs:
+                continue
+            x_gts_ref = x_gts_ref_validator.resolve_ref_pattern(
+                subschema.get("x-gts-ref"), selected_type_id
+            )
+            if (
+                isinstance(x_gts_ref, str)
+                and x_gts_ref.startswith("gts.")
+                and "*" not in x_gts_ref
+            ):
+                yield x_gts_ref, True
+
+    def _validate_entity_transitive(
+        self,
+        gts_id: str,
+        visiting: set[str],
+        validated: set[str],
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> None:
+        entity = self.get(gts_id)
+        if not entity:
+            raise StoreGtsEntityNotFound(gts_id)
+        if entity.is_schema:
+            self._validate_schema_transitive(
+                gts_id, visiting, validated, gts_ref_validation
+            )
+        else:
+            self._validate_instance_transitive(
+                gts_id, visiting, validated, gts_ref_validation
+            )
+
+    def _has_valid_wildcard_match(
+        self,
+        pattern: str,
+        visiting: set[str],
+        validated: set[str],
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> bool:
+        wildcard = GtsWildcard(pattern)
+        for entity_id in self._by_id:
+            try:
+                if not GtsID(entity_id).wildcard_match(wildcard):
+                    continue
+                self._validate_entity_transitive(
+                    entity_id, visiting, validated, gts_ref_validation
+                )
+                return True
+            except Exception as error:  # noqa: BLE001 - try another wildcard match
+                logger.debug("Invalid wildcard candidate %s: %s", entity_id, error)
+                continue
+        return False
+
+    def validate_instance_content(
+        self,
+        content: dict[str, Any],
+        type_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
+    ) -> set[str]:
         """Validate unregistered instance content against a registered type schema."""
         schema_type = _require_schema_id(type_id)
         try:
@@ -735,9 +930,9 @@ class GtsStore:
         )
         validator.validate(content)
 
-        x_gts_ref_validator = XGtsRefValidator(store=self)
+        x_gts_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
         x_gts_ref_errors = x_gts_ref_validator.validate_instance(
-            content, self._resolve_schema_refs(schema)
+            content, self._resolve_schema_refs(schema), selected_type_id=schema_type.id
         )
         if x_gts_ref_errors:
             error_messages = [
@@ -746,11 +941,65 @@ class GtsStore:
             raise ValueError(
                 f"x-gts-ref validation failed: {'; '.join(error_messages)}"
             )
+        return x_gts_ref_validator.referenced_ids
 
     def validate_instance(
         self,
         gts_id: str,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> None:
+        """Validate an object instance and its complete dependency closure."""
+        self._validate_instance_transitive(gts_id, set(), set(), gts_ref_validation)
+
+    def _validate_instance_transitive(
+        self,
+        gts_id: str,
+        visiting: set[str],
+        validated: set[str],
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> None:
+        key = f"instance:{gts_id}"
+        if key in validated or key in visiting:
+            return
+        visiting.add(key)
+        try:
+            referenced_ids = self._validate_instance_local(gts_id, gts_ref_validation)
+
+            obj = (
+                self.get(GtsID(gts_id).id)
+                if GtsID.is_valid(gts_id)
+                else self.get(gts_id)
+            )
+            if not obj or not obj.type_id:
+                return
+            try:
+                self._validate_schema_transitive(
+                    obj.type_id, visiting, validated, gts_ref_validation
+                )
+            except Exception as error:
+                raise ValueError(
+                    f"Instance type '{obj.type_id}' is invalid: {error}"
+                ) from error
+
+            if gts_ref_validation is GtsRefValidationMode.ANY_VALID:
+                for dependency_id in referenced_ids:
+                    try:
+                        self._validate_entity_transitive(
+                            dependency_id, visiting, validated, gts_ref_validation
+                        )
+                    except Exception as error:
+                        raise ValueError(
+                            f"Referenced entity '{dependency_id}' is invalid: {error}"
+                        ) from error
+        finally:
+            visiting.remove(key)
+        validated.add(key)
+
+    def _validate_instance_local(
+        self,
+        gts_id: str,
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> set[str]:
         """
         Validate an object instance against its schema.
 
@@ -781,7 +1030,9 @@ class GtsStore:
             raise TypeError(f"Instance '{lookup_id}' content must be a dictionary")
 
         logger.info(f"Validating instance {gts_id} against schema {obj.type_id}")
-        self.validate_instance_content(obj.content, obj.type_id)
+        return self.validate_instance_content(
+            obj.content, obj.type_id, gts_ref_validation
+        )
 
     def cast(
         self,
