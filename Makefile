@@ -100,6 +100,11 @@ lint: py-env
 clippy: py-env
 	$(PYTHON) -m ruff check --fix gts/src
 
+# Format code and apply auto-fixable lint corrections
+fix: py-env
+	$(PYTHON) -m ruff format gts/src
+	$(PYTHON) -m ruff check --fix gts/src
+
 # Run type checker
 mypy: py-env
 	$(PYTHON) -m mypy gts/src/gts --ignore-missing-imports
