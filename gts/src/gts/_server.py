@@ -401,7 +401,9 @@ class GtsHttpServer:
         body: ValidateInstanceRequest,
         gts_ref_validation: GtsRefValidationMode = GTS_REF_VALIDATION_QUERY,
     ) -> dict[str, Any]:
-        return self.ops.validate_instance(body.instance_id, gts_ref_validation).to_dict()
+        return self.ops.validate_instance(
+            body.instance_id, gts_ref_validation
+        ).to_dict()
 
     async def validate_json(
         self,

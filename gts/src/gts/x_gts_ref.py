@@ -91,7 +91,9 @@ class XGtsRefValidator:
                 else GtsRefValidationMode.NONE
             )
         elif isinstance(mode, bool):
-            mode = GtsRefValidationMode.ANY_PRESENT if mode else GtsRefValidationMode.NONE
+            mode = (
+                GtsRefValidationMode.ANY_PRESENT if mode else GtsRefValidationMode.NONE
+            )
         self.store = store
         self.mode = GtsRefValidationMode(mode)
         self.referenced_ids: set[str] = set()
