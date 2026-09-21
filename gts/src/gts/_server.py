@@ -1,19 +1,18 @@
 from __future__ import annotations
 
 # ruff: noqa: B008
-
 import logging
 import sys
 import time
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import Body, FastAPI, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, model_validator
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .ops import GtsOps
 from .gts_ref_validation import GtsRefValidationMode
+from .ops import GtsOps
 
 logger = logging.getLogger(__name__)
 GTS_REF_VALIDATION_QUERY = Query(
@@ -349,7 +348,7 @@ class GtsHttpServer:
     # Handlers as methods (no free functions)
     async def add_entity(
         self,
-        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        body: dict[str, Any] = Body(...),
         validate: bool = Query(False),
         validation: bool = Query(False),
         gts_ref_validation: GtsRefValidationMode = GTS_REF_VALIDATION_QUERY,
@@ -364,7 +363,7 @@ class GtsHttpServer:
 
     async def add_entities(
         self,
-        body: list[dict[str, Any]] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        body: list[dict[str, Any]] = Body(...),
     ) -> JSONResponse:
         return JSONResponse(self.ops.add_entities(body).to_dict())
 
@@ -379,7 +378,7 @@ class GtsHttpServer:
 
     async def extract_id(
         self,
-        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        body: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
         return self.ops.extract_id(body).to_dict()
 
@@ -407,14 +406,14 @@ class GtsHttpServer:
 
     async def validate_json(
         self,
-        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        body: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
         return self.ops.validate_json(body).to_dict()
 
     async def validate_json_as_type(
         self,
         gts_type: str,
-        body: dict[str, Any] = Body(...),  # noqa: B008 - FastAPI dependency pattern
+        body: dict[str, Any] = Body(...),
     ) -> dict[str, Any]:
         return self.ops.validate_json(body, explicit_type_id=gts_type).to_dict()
 
