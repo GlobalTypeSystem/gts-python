@@ -410,6 +410,98 @@ class GtsStore:
     def _content_is_final(content: dict[str, Any]) -> bool:
         return content.get("x-gts-final") is True
 
+    @staticmethod
+    def _schema_dialect(schema: dict[str, Any]) -> str:
+        dialect = schema.get("$schema")
+        if dialect is None:
+            return "draft-07"
+        if not isinstance(dialect, str) or not dialect:
+            raise ValueError("$schema must declare a supported JSON Schema dialect")
+        normalized = dialect.removesuffix("#").lower().replace("https://", "http://", 1)
+        supported = {
+            "http://json-schema.org/draft-07/schema": "draft-07",
+            "http://json-schema.org/draft/2019-09/schema": "2019-09",
+            "http://json-schema.org/draft/2020-12/schema": "2020-12",
+        }
+        try:
+            return supported[normalized]
+        except KeyError as error:
+            raise ValueError(f"Unsupported JSON Schema dialect: {dialect}") from error
+
+    def _validate_chain_dialect(
+        self,
+        gts_id: str,
+        chain_ids: list[str],
+        transient_schema: dict[str, Any] | None,
+    ) -> None:
+        root_entity = self.get(chain_ids[0])
+        root_content = (
+            transient_schema
+            if chain_ids[0] == gts_id and transient_schema is not None
+            else root_entity.content
+            if root_entity
+            else None
+        )
+        if not isinstance(root_content, dict):
+            return
+        root_dialect = self._schema_dialect(root_content)
+
+        for chain_id in chain_ids:
+            entity = self.get(chain_id)
+            content = (
+                transient_schema
+                if chain_id == gts_id and transient_schema is not None
+                else entity.content
+                if entity
+                else None
+            )
+            if (
+                isinstance(content, dict)
+                and self._schema_dialect(content) != root_dialect
+            ):
+                raise ValueError(
+                    "GTS derivation chain mixes JSON Schema dialects: "
+                    f"root type '{chain_ids[0]}' uses {root_dialect} but "
+                    f"'{chain_id}' uses {self._schema_dialect(content)}; every type "
+                    "in a chained $id hierarchy must use the root type's dialect"
+                )
+
+        visited: set[str] = set()
+        queue: list[tuple[str, dict[str, Any]]] = (
+            [(gts_id, transient_schema)] if transient_schema is not None else []
+        )
+        if not queue:
+            entity = self.get(gts_id)
+            if entity and isinstance(entity.content, dict):
+                queue.append((gts_id, entity.content))
+        while queue:
+            current_id, content = queue.pop(0)
+            if current_id in visited:
+                continue
+            visited.add(current_id)
+            for dependency_id, dependency_is_type in self._schema_dependencies(
+                content, include_gts_refs=False
+            ):
+                if not dependency_is_type or dependency_id == current_id:
+                    continue
+                target = self.get(dependency_id)
+                if (
+                    not target
+                    or not target.is_schema
+                    or not isinstance(target.content, dict)
+                ):
+                    continue
+                target_dialect = self._schema_dialect(target.content)
+                if target_dialect != root_dialect:
+                    raise ValueError(
+                        "GTS derivation mixes JSON Schema dialects: "
+                        f"root type '{chain_ids[0]}' uses {root_dialect} but $ref "
+                        f"target '{dependency_id}' uses {target_dialect}; every type "
+                        "in the chain and its transitive gts:// $ref targets must use "
+                        "the root type's dialect"
+                    )
+                queue.append((dependency_id, target.content))
+
     def _validate_schema_chain(
         self, gts_id: str, transient_schema: dict[str, Any] | None = None
     ) -> None:
@@ -417,16 +509,17 @@ class GtsStore:
         gid = GtsID(gts_id)
         segments = gid.gts_id_segments
 
-        # Single-segment schemas have no parent to validate against
-        if len(segments) < 2:
-            return
-
-        # Build chain IDs
         chain_ids = []
         prefix = "gts."
         for seg in segments:
             chain_ids.append(prefix + seg.segment)
             prefix = prefix + seg.segment
+
+        self._validate_chain_dialect(gts_id, chain_ids, transient_schema)
+
+        # Single-segment schemas have no parent to validate against
+        if len(segments) < 2:
+            return
 
         # Validate each adjacent pair
         for i in range(len(chain_ids) - 1):
@@ -688,6 +781,7 @@ class GtsStore:
                 f"Invalid $schema URL '{meta_schema_url}': must be a standard JSON Schema URL, not a GTS ID"
             )
 
+        self._schema_dialect(schema_content)
         logger.info(f"Validating schema {schema_id.id}")
         self._validate_schema_refs(schema_content, "")
         self._validate_schema_ref_targets(schema_content)
@@ -916,6 +1010,7 @@ class GtsStore:
         except KeyError as error:
             raise StoreGtsSchemaNotFound(schema_type.id) from error
 
+        self._schema_dialect(schema)
         if isinstance(schema, dict) and self._content_is_abstract(schema):
             raise ValueError(
                 f"type '{schema_type.id}' is abstract and cannot have direct instances"

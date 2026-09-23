@@ -308,6 +308,23 @@ class TestBuildEffectiveTraits:
         errors = effective.validate(check_unresolved=True)
         assert any("not a valid JSON Schema" in e for e in errors)
 
+    def test_draft7_tuple_schema_integrity_uses_host_dialect(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "pair": {
+                    "type": "array",
+                    "items": [{"type": "string"}],
+                }
+            },
+        }
+        effective = build_effective_traits(
+            [schema],
+            {"pair": ["ok"]},
+            "http://json-schema.org/draft-07/schema#",
+        )
+        assert effective.validate(check_unresolved=True) == []
+
     def test_dialect_applied_to_effective_schema(self):
         effective = build_effective_traits(
             [{"type": "object"}], {}, "https://json-schema.org/draft/2020-12/schema"

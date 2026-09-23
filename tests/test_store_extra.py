@@ -285,6 +285,51 @@ class TestValidateSchemaChain:
         with pytest.raises(ValueError, match="not found for chain validation"):
             store._validate_schema_chain("gts.x.test._.base.v1~x.test._.derived.v1~")
 
+    @pytest.mark.parametrize(
+        "dialect",
+        [
+            "https://example.invalid/not-a-json-schema-dialect",
+            "https://json-schema.org/draft/2020-21/schema",
+        ],
+    )
+    def test_unsupported_schema_dialect_raises(self, dialect):
+        with pytest.raises(ValueError, match="Unsupported JSON Schema dialect"):
+            GtsStore._schema_dialect({"$schema": dialect})
+
+    def test_mixed_dialect_chain_raises(self):
+        base = _schema_entity("gts.x.test._.base.v1~")
+        derived = _schema_entity(
+            "gts.x.test._.base.v1~x.test._.derived.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        store = GtsStore(reader=None)
+        store.register(base)
+        store.register(derived)
+
+        with pytest.raises(ValueError, match="mixes JSON Schema dialects"):
+            store._validate_schema_chain("gts.x.test._.base.v1~x.test._.derived.v1~")
+
+    def test_transitive_ref_dialect_mismatch_raises(self):
+        foreign = _schema_entity(
+            "gts.x.test._.foreign.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        middle = _schema_entity(
+            "gts.x.test._.middle.v1~",
+            {"allOf": [{"$ref": "gts://gts.x.test._.foreign.v1~"}]},
+        )
+        host = _schema_entity(
+            "gts.x.test._.host.v1~",
+            {"allOf": [{"$ref": "gts://gts.x.test._.middle.v1~"}]},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(middle)
+        store.register(host)
+
+        with pytest.raises(ValueError, match="gts.x.test._.foreign.v1~"):
+            store._validate_schema_chain("gts.x.test._.host.v1~")
+
     def test_incompatible_derivation_raises(self):
         base = _schema_entity(
             "gts.x.test._.base.v1~",
