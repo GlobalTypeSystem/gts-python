@@ -11,6 +11,7 @@ from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
 from . import compatibility, derivation, traits
+from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import looks_like_gts, strip_scheme, with_scheme
 from .entities import GtsEntity
 from .gts import GtsID, GtsRef, GtsWildcard
@@ -428,6 +429,24 @@ class GtsStore:
         except KeyError as error:
             raise ValueError(f"Unsupported JSON Schema dialect: {dialect}") from error
 
+    def _validate_local_ref_dialects(
+        self, schema: dict[str, Any], root_id: str, root_dialect: str
+    ) -> None:
+        for subschema, _schema_path in iter_schema_nodes(schema):
+            ref = subschema.get("$ref")
+            if not isinstance(ref, str) or not ref.startswith("#"):
+                continue
+            target = resolve_json_pointer(schema, ref)
+            if not isinstance(target, dict) or "$schema" not in target:
+                continue
+            target_dialect = self._schema_dialect(target)
+            if target_dialect != root_dialect:
+                raise ValueError(
+                    "GTS schema reference graph mixes JSON Schema dialects: "
+                    f"root type '{root_id}' uses {root_dialect} but local $ref "
+                    f"target '{ref}' uses {target_dialect}"
+                )
+
     def _validate_chain_dialect(
         self,
         gts_id: str,
@@ -455,16 +474,16 @@ class GtsStore:
                 if entity
                 else None
             )
-            if (
-                isinstance(content, dict)
-                and self._schema_dialect(content) != root_dialect
-            ):
-                raise ValueError(
-                    "GTS derivation chain mixes JSON Schema dialects: "
-                    f"root type '{chain_ids[0]}' uses {root_dialect} but "
-                    f"'{chain_id}' uses {self._schema_dialect(content)}; every type "
-                    "in a chained $id hierarchy must use the root type's dialect"
-                )
+            if isinstance(content, dict):
+                chain_dialect = self._schema_dialect(content)
+                if chain_dialect != root_dialect:
+                    raise ValueError(
+                        "GTS derivation chain mixes JSON Schema dialects: "
+                        f"root type '{chain_ids[0]}' uses {root_dialect} but "
+                        f"'{chain_id}' uses {chain_dialect}; every type in a chained "
+                        "$id hierarchy must use the root type's dialect"
+                    )
+                self._validate_local_ref_dialects(content, chain_ids[0], root_dialect)
 
         visited: set[str] = set()
         queue: list[tuple[str, dict[str, Any]]] = (
@@ -500,6 +519,9 @@ class GtsStore:
                         "in the chain and its transitive gts:// $ref targets must use "
                         "the root type's dialect"
                     )
+                self._validate_local_ref_dialects(
+                    target.content, chain_ids[0], root_dialect
+                )
                 queue.append((dependency_id, target.content))
 
     def _validate_schema_chain(

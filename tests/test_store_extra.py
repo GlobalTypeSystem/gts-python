@@ -296,6 +296,27 @@ class TestValidateSchemaChain:
         with pytest.raises(ValueError, match="Unsupported JSON Schema dialect"):
             GtsStore._schema_dialect({"$schema": dialect})
 
+    def test_local_ref_dialect_mismatch_raises(self):
+        schema = _schema_entity(
+            "gts.x.test._.embedded.v1~",
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "properties": {"legacy": {"$ref": "#/$defs/legacy"}},
+                "$defs": {
+                    "legacy": {
+                        "$id": "legacy",
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "string",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        with pytest.raises(ValueError, match=r"local \$ref target"):
+            store._validate_schema_chain(schema.gts_id.id)
+
     def test_mixed_dialect_chain_raises(self):
         base = _schema_entity("gts.x.test._.base.v1~")
         derived = _schema_entity(
