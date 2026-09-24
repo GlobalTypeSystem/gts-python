@@ -13,6 +13,7 @@ from gts.store import (
     StoreGtsEntityNotFound,
     StoreGtsObjectNotFound,
 )
+from jsonschema import ValidationError
 
 
 class MockGtsReader(GtsReader):
@@ -295,6 +296,36 @@ class TestValidateSchemaChain:
     def test_unsupported_schema_dialect_raises(self, dialect):
         with pytest.raises(ValueError, match="Unsupported JSON Schema dialect"):
             GtsStore._schema_dialect({"$schema": dialect})
+
+    def test_missing_schema_dialect_raises(self):
+        """A document without $schema is not eligible for schema validation."""
+        with pytest.raises(ValueError, match=r"\$schema must declare"):
+            GtsStore._schema_dialect({})
+
+    def test_draft7_alias_uses_draft7_validator(self):
+        """Canonicalize accepted aliases before schema and instance validation."""
+        schema_id = "gts.x.test._.draft7_alias.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft-07/schema#",
+                "required": ["pair"],
+                "properties": {
+                    "pair": {
+                        "type": "array",
+                        "items": [{"type": "string"}, {"type": "integer"}],
+                        "additionalItems": False,
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        store.validate_schema(schema_id)
+        store.validate_instance_content({"pair": ["ok", 1]}, schema_id)
+        with pytest.raises(ValidationError):
+            store.validate_instance_content({"pair": ["ok", "wrong"]}, schema_id)
 
     def test_local_ref_dialect_mismatch_raises(self):
         schema = _schema_entity(

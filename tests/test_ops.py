@@ -155,13 +155,29 @@ class TestAddEntity:
 
 class TestAddSchemaLegacy:
     def test_add_schema_legacy_success(self, ops):
-        result = ops.add_schema("gts.x.test._.legacy.v1~", {"type": "object"})
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$id": "gts://gts.x.test._.legacy.v1~",
+            "type": "object",
+        }
+        result = ops.add_schema("gts.x.test._.legacy.v1~", schema)
         assert result.ok is True
         assert result.id == "gts.x.test._.legacy.v1~"
 
     def test_add_schema_legacy_changed_content_is_conflict(self, ops):
-        assert ops.add_schema("gts.x.test._.legacy.v1~", {"type": "object"}).ok is True
-        result = ops.add_schema("gts.x.test._.legacy.v1~", {"type": "string"})
+        dialect = "http://json-schema.org/draft-07/schema#"
+        schema_id = "gts://gts.x.test._.legacy.v1~"
+        assert (
+            ops.add_schema(
+                "gts.x.test._.legacy.v1~",
+                {"$schema": dialect, "$id": schema_id, "type": "object"},
+            ).ok
+            is True
+        )
+        result = ops.add_schema(
+            "gts.x.test._.legacy.v1~",
+            {"$schema": dialect, "$id": schema_id, "type": "string"},
+        )
 
         assert result.ok is False
         assert result.conflict is True

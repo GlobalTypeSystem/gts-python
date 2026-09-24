@@ -170,6 +170,20 @@ class GtsStore:
         Creates a JsonEntity from the schema dict.
         """
         gts_id = GtsID.parse_type(type_id)
+        dialect = schema.get("$schema")
+        if not isinstance(dialect, str) or not dialect:
+            raise ValueError("Type Schema must contain a top-level $schema field")
+        embedded_id = schema.get("$id")
+        if not isinstance(embedded_id, str) or not embedded_id.startswith("gts://gts."):
+            raise ValueError("Type Schema must contain a top-level $id in gts:// form")
+        try:
+            normalized_id = GtsID.parse_type(strip_scheme(embedded_id))
+        except ValueError as error:
+            raise ValueError(f"Invalid GTS Type Schema $id: {embedded_id}") from error
+        if normalized_id.id != gts_id.id:
+            raise ValueError(
+                f"Embedded $id '{embedded_id}' must match external type_id '{type_id}'"
+            )
         entity = GtsEntity(content=schema, gts_id=gts_id, is_schema=True)
         self._by_id[gts_id.id] = entity
 
@@ -414,8 +428,6 @@ class GtsStore:
     @staticmethod
     def _schema_dialect(schema: dict[str, Any]) -> str:
         dialect = schema.get("$schema")
-        if dialect is None:
-            return "draft-07"
         if not isinstance(dialect, str) or not dialect:
             raise ValueError("$schema must declare a supported JSON Schema dialect")
         normalized = dialect.removesuffix("#").lower().replace("https://", "http://", 1)
@@ -428,6 +440,14 @@ class GtsStore:
             return supported[normalized]
         except KeyError as error:
             raise ValueError(f"Unsupported JSON Schema dialect: {dialect}") from error
+
+    @staticmethod
+    def _schema_dialect_uri(schema: dict[str, Any]) -> str:
+        return {
+            "draft-07": "http://json-schema.org/draft-07/schema#",
+            "2019-09": "https://json-schema.org/draft/2019-09/schema",
+            "2020-12": "https://json-schema.org/draft/2020-12/schema",
+        }[GtsStore._schema_dialect(schema)]
 
     def _validate_local_ref_dialects(
         self, schema: dict[str, Any], root_id: str, root_dialect: str
@@ -714,11 +734,11 @@ class GtsStore:
             if leaf
             else None
         )
-        dialect = None
-        if isinstance(leaf_content, dict):
-            ds = leaf_content.get("$schema")
-            if isinstance(ds, str):
-                dialect = ds
+        dialect = (
+            self._schema_dialect_uri(leaf_content)
+            if isinstance(leaf_content, dict)
+            else None
+        )
 
         return traits.build_effective_traits(trait_schemas, merged_traits, dialect)
 
@@ -812,13 +832,10 @@ class GtsStore:
         self._validate_schema_chain(schema_id.id, schema_content)
 
         try:
-            from jsonschema import Draft7Validator
-
-            if meta_schema_url:
-                validator_class = validator_for({"$schema": meta_schema_url})
-                validator_class.check_schema(schema_content)
-            else:
-                Draft7Validator.check_schema(schema_content)
+            validator_class = validator_for(
+                {"$schema": self._schema_dialect_uri(schema_content)}
+            )
+            validator_class.check_schema(schema_content)
 
             logger.info(
                 f"Schema {schema_id.id} passed JSON Schema meta-schema validation"
@@ -1038,7 +1055,10 @@ class GtsStore:
                 f"type '{schema_type.id}' is abstract and cannot have direct instances"
             )
 
-        schema_for_validation = _without_x_gts_ref(schema)
+        schema_for_validation = {
+            **_without_x_gts_ref(schema),
+            "$schema": self._schema_dialect_uri(schema),
+        }
         validator_class = validator_for(schema_for_validation)
         validator = validator_class(
             schema_for_validation,

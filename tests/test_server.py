@@ -108,18 +108,29 @@ class TestHandlers:
     def test_add_schema(self, server):
         from gts._server import SchemaRegister
 
-        body = SchemaRegister(type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"})
+        body = SchemaRegister(
+            type_id="gts.x.test._.bar.v1~",
+            type_schema={
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "$id": "gts://gts.x.test._.bar.v1~",
+                "type": "object",
+            },
+        )
         resp = run(server.add_schema(body))
         assert resp.status_code == 200
 
     def test_add_schema_changed_content_conflict(self, server):
         from gts._server import SchemaRegister
 
+        dialect = "http://json-schema.org/draft-07/schema#"
+        schema_id = "gts://gts.x.test._.bar.v1~"
         initial = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"}
+            type_id="gts.x.test._.bar.v1~",
+            type_schema={"$schema": dialect, "$id": schema_id, "type": "object"},
         )
         changed = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~", type_schema={"type": "string"}
+            type_id="gts.x.test._.bar.v1~",
+            type_schema={"$schema": dialect, "$id": schema_id, "type": "string"},
         )
 
         assert run(server.add_schema(initial)).status_code == 200
