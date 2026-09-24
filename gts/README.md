@@ -2,7 +2,7 @@
 
 Python helpers and a reference HTTP service for the [Global Type System (GTS)](https://github.com/globaltypesystem/gts-spec). The package supports GTS identifier parsing, JSON Schema-backed validation, schema compatibility and derivation checks, traits, casting, queries, file loading, a CLI, and a FastAPI application.
 
-The package targets GTS specification v0.14.0 and requires Python 3.9 or later.
+The package targets GTS specification v0.14.1 and requires Python 3.9 or later.
 
 ## Installation
 
