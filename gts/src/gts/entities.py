@@ -184,6 +184,10 @@ class GtsEntity:
         from_schema: GtsEntity,
         resolver: Any | None = None,
     ) -> GtsEntityCastResult:
+        if self.gts_id is None:
+            raise SchemaCastError("source entity has no GTS identifier")
+        if to_schema.gts_id is None:
+            raise SchemaCastError("target schema has no GTS identifier")
         if (
             self.is_schema
             and from_schema.gts_id
@@ -386,8 +390,12 @@ class GtsEntity:
         # No schema reference found for instance
         return None
 
-    def get_graph(self) -> dict[str, set[str]]:
-        refs = {}
+    def get_graph(self) -> dict[str, Any]:
+        refs: dict[str, str] = {}
         for r in self.gts_refs:
             refs[r["sourcePath"]] = r["id"]
-        return {"id": self.gts_id.id, "type_id": self.type_id, "refs": refs}
+        return {
+            "id": self.gts_id.id if self.gts_id else None,
+            "type_id": self.type_id,
+            "refs": refs,
+        }

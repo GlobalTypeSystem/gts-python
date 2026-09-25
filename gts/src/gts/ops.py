@@ -436,7 +436,14 @@ class GtsOps:
                 is_type_schema=entity.is_schema,
             )
 
-        store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
+        # Both branches are guaranteed non-None by the guards above: a schema
+        # without gts_id and an instance without raw_id have already returned.
+        if entity.is_schema:
+            assert entity.gts_id is not None
+            store_key = entity.gts_id.id
+        else:
+            assert entity.raw_id is not None
+            store_key = entity.raw_id
         with self.store.transaction():
             previous = self.store.get(store_key)
             if (
@@ -454,13 +461,11 @@ class GtsOps:
 
             try:
                 if entity.is_schema:
-                    self.store.validate_schema_basic(entity.gts_id.id)
+                    self.store.validate_schema_basic(store_key)
                     if validate:
-                        self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
+                        self.store.validate_schema(store_key, gts_ref_validation)
                 elif validate:
-                    self.store.validate_instance(
-                        entity.raw_id or entity.gts_id.id, gts_ref_validation
-                    )
+                    self.store.validate_instance(store_key, gts_ref_validation)
             except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
                 self.store.unregister(store_key)
                 if previous:
@@ -558,6 +563,7 @@ class GtsOps:
         # Check if it's a wildcard pattern (contains *)
         is_wildcard = "*" in gts_id
         try:
+            parsed: GtsID
             if is_wildcard:
                 parsed = GtsWildcard(gts_id)
                 segs = parsed.gts_id_segments
@@ -680,8 +686,10 @@ class GtsOps:
 
         try:
             if entity.is_schema:
-                self.store.validate_schema_content(entity.gts_id.id, content)  # type: ignore[union-attr]
+                assert entity.gts_id is not None
+                self.store.validate_schema_content(entity.gts_id.id, content)
             else:
+                assert entity.type_id is not None
                 self.store.validate_instance_content(content, entity.type_id)
         except Exception as error:  # noqa: BLE001 - converted to a result object at API boundary
             error_message = str(error)

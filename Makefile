@@ -169,4 +169,4 @@ verify-spec-version:
 all: check build
 
 # Run all quality checks
-check: fmt lint test e2e
+check: fmt lint mypy test e2e

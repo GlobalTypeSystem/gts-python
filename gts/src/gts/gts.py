@@ -81,10 +81,12 @@ class GtsIdSegment:
         self.package: str = ""
         self.namespace: str = ""
         self.type: str = ""
-        self.ver_major: int = 0
+        self.ver_major: int | None = 0
         self.ver_minor: int | None = None
         self.is_type: bool = False
         self.is_wildcard: bool = False
+        # Marks the synthetic UUID tail of a combined anonymous instance id.
+        self._is_uuid_tail: bool = False
 
         self._parse_segment_id(num, offset, segment)
 
