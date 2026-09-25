@@ -26,7 +26,7 @@ $(error PYTHON must be set for local package targets (examples: venv: PYTHON=.ve
 endif
 endif
 
-.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec e2e coverage gts-server
+.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec verify-spec-version e2e coverage gts-server
 
 # Default target - show help
 .DEFAULT_GOAL := help
@@ -125,8 +125,8 @@ PORT ?= 8000
 gts-server: install
 	$(PYTHON) -m gts server --host 127.0.0.1 --port $(PORT)
 
-# Run end-to-end tests against gts-spec
-e2e: install
+# Run end-to-end tests against gts-spec (pinned via .gts-spec-version)
+e2e: install verify-spec-version
 	@echo "Starting server in background..."
 	@$(PYTHON) -m gts server --port 8000 & echo $$! > .server.pid
 	@sleep 2
@@ -144,9 +144,26 @@ security: py-env
 	$(PYTHON) -m pip install pip-audit
 	$(PYTHON) -m pip_audit
 
-# Update gts-spec submodule to latest
+# Spec conformance suite is pinned in .gts-spec-version (format vMAJOR.MINOR.PATCH)
+# so every checkout reproduces the same e2e run, mirroring the Rust reference.
+GTS_SPEC_VERSION ?= $(shell cat .gts-spec-version 2>/dev/null)
+
+# Check out the gts-spec submodule at the pinned .gts-spec-version tag
 update-spec:
-	git submodule update --remote .gts-spec
+	git submodule update --init .gts-spec
+	git -C .gts-spec fetch --tags --quiet origin
+	git -C .gts-spec checkout --quiet "$(GTS_SPEC_VERSION)"
+	@echo "gts-spec pinned to $(GTS_SPEC_VERSION)"
+
+# Fail if the checked-out gts-spec submodule does not match the pinned version
+verify-spec-version:
+	@current="$$(git -C .gts-spec describe --tags 2>/dev/null)"; \
+	if [ "$$current" != "$(GTS_SPEC_VERSION)" ]; then \
+		echo "gts-spec is at '$$current' but .gts-spec-version pins '$(GTS_SPEC_VERSION)'"; \
+		echo "run 'make update-spec' to sync"; \
+		exit 1; \
+	fi; \
+	echo "gts-spec matches pinned $(GTS_SPEC_VERSION)"
 
 # Run all checks and build
 all: check build
