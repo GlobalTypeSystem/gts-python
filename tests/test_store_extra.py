@@ -382,6 +382,25 @@ class TestValidateSchemaChain:
         with pytest.raises(ValueError, match="gts.x.test._.foreign.v1~"):
             store._validate_schema_chain("gts.x.test._.host.v1~")
 
+    def test_trait_resource_dialect_mismatch_raises(self):
+        schema_id = "gts.x.test._.trait_resource.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "x-gts-traits-schema": {
+                    "$id": "https://example.com/gts/legacy-traits",
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        with pytest.raises(ValueError, match="differs from host dialect"):
+            store.validate_schema(schema_id)
+
     def test_incompatible_derivation_raises(self):
         base = _schema_entity(
             "gts.x.test._.base.v1~",

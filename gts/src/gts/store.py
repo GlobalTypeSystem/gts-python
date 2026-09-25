@@ -717,6 +717,13 @@ class GtsStore:
             level_schemas: list[Any] = []
             traits.collect_trait_schema_from_value(content, level_schemas)
             for ts in level_schemas:
+                if isinstance(ts, dict) and "$schema" in ts:
+                    trait_dialect = self._schema_dialect(ts)
+                    host_dialect = self._schema_dialect(content)
+                    if trait_dialect != host_dialect:
+                        raise ValueError(
+                            f"trait schema dialect {trait_dialect} differs from host dialect {host_dialect}"
+                        )
                 # Inline local JSON Pointer refs against the host document, then
                 # resolve any gts:// refs so the composed schema is self-contained.
                 inlined = traits.inline_local_pointers(ts, content)
@@ -1049,6 +1056,7 @@ class GtsStore:
         except KeyError as error:
             raise StoreGtsSchemaNotFound(schema_type.id) from error
 
+        self._validate_schema_chain(schema_type.id)
         self._schema_dialect(schema)
         if isinstance(schema, dict) and self._content_is_abstract(schema):
             raise ValueError(

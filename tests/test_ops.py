@@ -354,6 +354,33 @@ class TestValidateJson:
         assert result.ok is True
         assert result.type_id == "gts.x.test._.foo.v1~"
 
+    def test_rejects_instance_of_mixed_dialect_schema_graph(self, ops):
+        ops.add_entity(
+            {
+                "$id": "gts://gts.x.test._.foreign.v1~",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+            }
+        )
+        ops.add_entity(
+            {
+                "$id": "gts://gts.x.test._.host.v1~",
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "type": "object",
+                "allOf": [{"$ref": "gts://gts.x.test._.foreign.v1~"}],
+            }
+        )
+
+        result = ops.validate_json(
+            {
+                "id": "gts.x.test._.host.v1~x.test._.item.v1",
+                "type": "gts.x.test._.host.v1~",
+            }
+        )
+
+        assert result.ok is False
+        assert "mixes JSON Schema dialects" in result.error
+
     def test_does_not_mutate_registry(self, ops, monkeypatch):
         monkeypatch.setattr(
             ops.store,
