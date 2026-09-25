@@ -1,5 +1,6 @@
 """Additional coverage-focused tests for gts.store.GtsStore."""
 
+import threading
 from collections.abc import Iterator
 from typing import Optional
 
@@ -8,6 +9,7 @@ from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
 from gts.gts import GtsID
 from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
 from gts.store import (
+    MAX_SCHEMA_REF_EXPANSIONS,
     GtsReader,
     GtsStore,
     StoreGtsEntityNotFound,
@@ -87,6 +89,57 @@ class TestRegisterEdgeCases:
     def test_unregister_missing_id_noop(self):
         store = GtsStore(reader=None)
         store.unregister("gts.x.test._.missing.v1~")  # should not raise
+
+    def test_store_uses_defensive_copies(self):
+        store = GtsStore(reader=None)
+        entity = _schema_entity("gts.x.test._.copy.v1~")
+        store.register(entity)
+        entity.content["type"] = "array"
+        first = store.get("gts.x.test._.copy.v1~")
+        assert first.content["type"] == "object"
+        first.content["type"] = "number"
+        items = dict(store.items())
+        items["gts.x.test._.copy.v1~"].content["type"] = "boolean"
+        assert store.get("gts.x.test._.copy.v1~").content["type"] == "object"
+
+    def test_transaction_serializes_writers(self):
+        store = GtsStore(reader=None)
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+
+        def first_writer():
+            with store.transaction():
+                entered.set()
+                release.wait()
+
+        def second_writer():
+            entered.wait()
+            store.register(_schema_entity("gts.x.test._.serialized.v1~"))
+            completed.set()
+
+        first = threading.Thread(target=first_writer)
+        second = threading.Thread(target=second_writer)
+        first.start()
+        second.start()
+        assert not completed.wait(0.05)
+        release.set()
+        first.join()
+        second.join()
+        assert completed.is_set()
+
+    def test_reference_expansion_budget(self):
+        store = GtsStore(reader=None)
+        target_id = "gts.x.test._.budget.v1~"
+        store.register(_schema_entity(target_id))
+        schema = {
+            "allOf": [
+                {"$ref": f"gts://{target_id}"}
+                for _ in range(MAX_SCHEMA_REF_EXPANSIONS + 1)
+            ]
+        }
+        with pytest.raises(ValueError, match="expansion exceeds limit"):
+            store._resolve_schema_refs(schema)
 
 
 class TestValidateSchemaRefs:

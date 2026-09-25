@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import copy
 import logging
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from jsonschema import RefResolver
@@ -21,6 +24,8 @@ from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
+
+MAX_SCHEMA_REF_EXPANSIONS = 10_000
 
 
 def _require_schema_id(value: str) -> GtsID:
@@ -123,6 +128,7 @@ class GtsStore:
         """
         self._by_id: dict[str, GtsEntity] = {}
         self._reader = reader
+        self._lock = threading.RLock()
 
         # Populate entities from reader if provided
         if self._reader:
@@ -137,7 +143,7 @@ class GtsStore:
 
         for entity in self._reader:
             if entity.gts_id and entity.gts_id.id:
-                self._by_id[entity.gts_id.id] = entity
+                self._by_id[entity.gts_id.id] = copy.deepcopy(entity)
 
     def register(self, entity: GtsEntity) -> None:
         """Register a GtsEntity in the store.
@@ -148,21 +154,29 @@ class GtsStore:
         # Instances should remain addressable by the id value they carry.
         # For plain UUID anonymous instances, `gts_id` may be inferred from
         # the `type` field while `raw_id` is the UUID we must look up by.
-        if not entity.is_schema and entity.raw_id:
-            self._by_id[entity.raw_id] = entity
-            return
+        stored = copy.deepcopy(entity)
+        with self._lock:
+            if not stored.is_schema and stored.raw_id:
+                self._by_id[stored.raw_id] = stored
+                return
 
-        if entity.gts_id and entity.gts_id.id:
-            self._by_id[entity.gts_id.id] = entity
-        elif entity.raw_id:
-            # Allow non-GTS entities with raw_id (e.g., UUIDs or simple strings)
-            self._by_id[entity.raw_id] = entity
-        else:
-            raise ValueError("Entity must have a valid gts_id or raw_id")
+            if stored.gts_id and stored.gts_id.id:
+                self._by_id[stored.gts_id.id] = stored
+            elif stored.raw_id:
+                # Allow non-GTS entities with raw_id (e.g., UUIDs or simple strings)
+                self._by_id[stored.raw_id] = stored
+            else:
+                raise ValueError("Entity must have a valid gts_id or raw_id")
 
     def unregister(self, entity_id: str) -> None:
         """Remove an entity from the in-memory registry if it is present."""
-        self._by_id.pop(entity_id, None)
+        with self._lock:
+            self._by_id.pop(entity_id, None)
+
+    @contextmanager
+    def transaction(self):
+        with self._lock:
+            yield
 
     def register_schema(self, type_id: str, schema: dict[str, Any]) -> None:
         """
@@ -184,8 +198,9 @@ class GtsStore:
             raise ValueError(
                 f"Embedded $id '{embedded_id}' must match external type_id '{type_id}'"
             )
-        entity = GtsEntity(content=schema, gts_id=gts_id, is_schema=True)
-        self._by_id[gts_id.id] = entity
+        entity = GtsEntity(content=copy.deepcopy(schema), gts_id=gts_id, is_schema=True)
+        with self._lock:
+            self._by_id[gts_id.id] = entity
 
     def get(self, entity_id: str) -> GtsEntity | None:
         """
@@ -198,18 +213,19 @@ class GtsStore:
         scheme themselves.
         """
         entity_id = strip_scheme(entity_id)
-        # Check cache first
-        if entity_id in self._by_id:
-            return self._by_id[entity_id]
+        with self._lock:
+            entity = self._by_id.get(entity_id)
+            if entity is not None:
+                return copy.deepcopy(entity)
 
-        # Try to fetch from reader
-        if self._reader:
-            entity = self._reader.read_by_id(entity_id)
-            if entity:
-                self._by_id[entity_id] = entity
-                return entity
+            if self._reader:
+                entity = self._reader.read_by_id(entity_id)
+                if entity:
+                    stored = copy.deepcopy(entity)
+                    self._by_id[entity_id] = stored
+                    return copy.deepcopy(stored)
 
-        return None
+            return None
 
     def get_schema_content(self, type_id: str) -> dict[str, Any]:
         """Get schema content as dict (legacy method for backward compatibility)."""
@@ -233,7 +249,7 @@ class GtsStore:
 
         # Create a store dict that maps GTS IDs to their schema content
         store = {}
-        for entity_id, entity in self._by_id.items():
+        for entity_id, entity in self.items():
             if entity.is_schema and isinstance(entity.content, dict):
                 store[entity_id] = entity.content
 
@@ -245,7 +261,7 @@ class GtsStore:
 
     def _create_reference_registry(self) -> Registry:
         registry = Registry()
-        for entity_id, entity in self._by_id.items():
+        for entity_id, entity in self.items():
             if entity.is_schema and isinstance(entity.content, dict):
                 resource = Resource.from_contents(
                     _without_x_gts_ref(entity.content),
@@ -256,7 +272,8 @@ class GtsStore:
 
     def items(self):
         """Return all entity ID and entity pairs."""
-        return self._by_id.items()
+        with self._lock:
+            return tuple((entity_id, copy.deepcopy(entity)) for entity_id, entity in self._by_id.items())
 
     @staticmethod
     def _validate_schema_refs(schema: dict[str, Any], path: str = "") -> None:
@@ -627,7 +644,7 @@ class GtsStore:
         import copy
 
         return self._inline_refs(
-            copy.deepcopy(schema), set(), self._supports_ref_siblings(schema)
+            copy.deepcopy(schema), set(), self._supports_ref_siblings(schema), [0]
         )
 
     @staticmethod
@@ -638,9 +655,14 @@ class GtsStore:
         )
 
     def _inline_refs(
-        self, node: Any, seen: set[str], supports_ref_siblings: bool
+        self,
+        node: Any,
+        seen: set[str],
+        supports_ref_siblings: bool,
+        expansions: list[int] | None = None,
     ) -> Any:
         """Recursively inline $ref references, guarding against cycles."""
+        expansions = expansions if expansions is not None else [0]
         if isinstance(node, dict):
             ref_uri = node.get("$ref")
             if isinstance(ref_uri, str):
@@ -652,6 +674,11 @@ class GtsStore:
                     if ref_id in seen:
                         # Cycle detected: leave the $ref unresolved.
                         return node
+                    expansions[0] += 1
+                    if expansions[0] > MAX_SCHEMA_REF_EXPANSIONS:
+                        raise ValueError(
+                            f"schema reference expansion exceeds limit of {MAX_SCHEMA_REF_EXPANSIONS}"
+                        )
                     try:
                         ref_schema = self.get_schema_content(ref_id)
                     except KeyError:
@@ -662,6 +689,7 @@ class GtsStore:
                         copy.deepcopy(ref_schema),
                         seen | {ref_id},
                         self._supports_ref_siblings(ref_schema),
+                        expansions,
                     )
                     if supports_ref_siblings and len(node) > 1:
                         siblings = {
@@ -671,18 +699,18 @@ class GtsStore:
                             "allOf": [
                                 resolved,
                                 self._inline_refs(
-                                    siblings, seen, supports_ref_siblings
+                                    siblings, seen, supports_ref_siblings, expansions
                                 ),
                             ]
                         }
                     return resolved
             return {
-                key: self._inline_refs(value, seen, supports_ref_siblings)
+                key: self._inline_refs(value, seen, supports_ref_siblings, expansions)
                 for key, value in node.items()
             }
         if isinstance(node, list):
             return [
-                self._inline_refs(item, seen, supports_ref_siblings) for item in node
+                self._inline_refs(item, seen, supports_ref_siblings, expansions) for item in node
             ]
         return node
 
@@ -1030,7 +1058,7 @@ class GtsStore:
         gts_ref_validation: GtsRefValidationMode,
     ) -> bool:
         wildcard = GtsWildcard(pattern)
-        for entity_id in self._by_id:
+        for entity_id, _ in self.items():
             try:
                 if not GtsID(entity_id).wildcard_match(wildcard):
                     continue
@@ -1481,7 +1509,7 @@ class GtsStore:
             return result
 
         # Filter entities
-        for entity in self._by_id.values():
+        for _, entity in self.items():
             if len(result.results) >= limit:
                 break
             if not isinstance(entity.content, dict) or not entity.gts_id:

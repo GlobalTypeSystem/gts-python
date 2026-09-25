@@ -437,38 +437,39 @@ class GtsOps:
             )
 
         store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
-        previous = self.store.get(store_key)
-        if (
-            previous
-            and not self.allow_entity_updates
-            and previous.content != entity.content
-        ):
-            return GtsAddEntityResult(
-                ok=False,
-                error=f"Entity '{store_key}' is already registered with different content",
-                is_type_schema=entity.is_schema,
-                conflict=True,
-            )
-        self.store.register(entity)
-
-        try:
-            if entity.is_schema:
-                self.store.validate_schema_basic(entity.gts_id.id)
-                if validate:
-                    self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
-            elif validate:
-                self.store.validate_instance(
-                    entity.raw_id or entity.gts_id.id, gts_ref_validation
+        with self.store.transaction():
+            previous = self.store.get(store_key)
+            if (
+                previous
+                and not self.allow_entity_updates
+                and previous.content != entity.content
+            ):
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Entity '{store_key}' is already registered with different content",
+                    is_type_schema=entity.is_schema,
+                    conflict=True,
                 )
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            self.store.unregister(store_key)
-            if previous:
-                self.store.register(previous)
-            return GtsAddEntityResult(
-                ok=False,
-                error=f"Validation failed: {e!s}",
-                is_type_schema=entity.is_schema,
-            )
+            self.store.register(entity)
+
+            try:
+                if entity.is_schema:
+                    self.store.validate_schema_basic(entity.gts_id.id)
+                    if validate:
+                        self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
+                elif validate:
+                    self.store.validate_instance(
+                        entity.raw_id or entity.gts_id.id, gts_ref_validation
+                    )
+            except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
+                self.store.unregister(store_key)
+                if previous:
+                    self.store.register(previous)
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Validation failed: {e!s}",
+                    is_type_schema=entity.is_schema,
+                )
 
         # Return gts_id if available, otherwise raw_id
         entity_id = entity.gts_id.id if entity.gts_id else (entity.raw_id or "")
@@ -511,20 +512,21 @@ class GtsOps:
             )
         type_id = strip_scheme(embedded_id)
         try:
-            previous = self.store.get(type_id)
-            if (
-                previous
-                and not self.allow_entity_updates
-                and previous.content != schema
-            ):
-                return GtsAddSchemaResult(
-                    ok=False,
-                    type_id=type_id,
-                    error=f"Entity '{type_id}' is already registered with different content",
-                    conflict=True,
-                )
-            self.store.register_schema(type_id, schema)
-            return GtsAddSchemaResult(ok=True, type_id=type_id)
+            with self.store.transaction():
+                previous = self.store.get(type_id)
+                if (
+                    previous
+                    and not self.allow_entity_updates
+                    and previous.content != schema
+                ):
+                    return GtsAddSchemaResult(
+                        ok=False,
+                        type_id=type_id,
+                        error=f"Entity '{type_id}' is already registered with different content",
+                        conflict=True,
+                    )
+                self.store.register_schema(type_id, schema)
+                return GtsAddSchemaResult(ok=True, type_id=type_id)
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
             return GtsAddSchemaResult(ok=False, type_id=type_id, error=str(e))
 

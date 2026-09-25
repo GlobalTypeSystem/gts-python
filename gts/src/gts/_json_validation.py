@@ -256,7 +256,8 @@ class GtsJsonValidator:
             if not entity.is_schema or not entity.gts_id:
                 continue
             gid = entity.gts_id
-            if store.get(gid.id) is not entity:
+            stored = store.get(gid.id)
+            if stored is None or stored.content != entity.content:
                 continue
             depth = len(gid.gts_id_segments)
             file = entity.file.path if entity.file else entity.label
@@ -290,8 +291,9 @@ class GtsJsonValidator:
             key = self._registry_key(entity)
             if key is None:
                 continue
-            # Skip rejected duplicates: only validate the registered entity
-            if store.get(key) is not entity:
+            # Skip rejected duplicates: only validate content retained by the registry.
+            stored = store.get(key)
+            if stored is None or stored.content != entity.content:
                 continue
             depth = self._entity_depth(entity)
             gts_id_str = entity.gts_id.id if entity.gts_id else ""
