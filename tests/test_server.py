@@ -105,36 +105,36 @@ class TestHandlers:
         resp = run(server.add_entities(body=[SCHEMA, INSTANCE]))
         assert resp.status_code == 200
 
-    def test_add_schema(self, server):
-        from gts._server import SchemaRegister
+    def test_add_schemas(self, server):
+        import json
 
-        body = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~",
-            type_schema={
+        body = [
+            {
                 "$schema": "http://json-schema.org/draft-07/schema#",
                 "$id": "gts://gts.x.test._.bar.v1~",
                 "type": "object",
             },
-        )
-        resp = run(server.add_schema(body))
+        ]
+        resp = run(server.add_schemas(body))
         assert resp.status_code == 200
+        payload = json.loads(resp.body)
+        assert payload["ok"] is True
+        assert payload["results"][0]["type_id"] == "gts.x.test._.bar.v1~"
 
-    def test_add_schema_changed_content_conflict(self, server):
-        from gts._server import SchemaRegister
+    def test_add_schemas_changed_content_conflict(self, server):
+        import json
 
         dialect = "http://json-schema.org/draft-07/schema#"
         schema_id = "gts://gts.x.test._.bar.v1~"
-        initial = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~",
-            type_schema={"$schema": dialect, "$id": schema_id, "type": "object"},
-        )
-        changed = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~",
-            type_schema={"$schema": dialect, "$id": schema_id, "type": "string"},
-        )
+        initial = [{"$schema": dialect, "$id": schema_id, "type": "object"}]
+        changed = [{"$schema": dialect, "$id": schema_id, "type": "string"}]
 
-        assert run(server.add_schema(initial)).status_code == 200
-        assert run(server.add_schema(changed)).status_code == 409
+        assert run(server.add_schemas(initial)).status_code == 200
+        resp = run(server.add_schemas(changed))
+        assert resp.status_code == 200
+        payload = json.loads(resp.body)
+        assert payload["ok"] is False
+        assert payload["results"][0]["ok"] is False
 
     def test_validate_id(self, server):
         result = run(server.validate_id(id="gts.x.test._.foo.v1~"))

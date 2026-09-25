@@ -153,39 +153,54 @@ class TestAddEntity:
         assert "must be a GTS identifier" in result.results[0].error
 
 
-class TestAddSchemaLegacy:
-    def test_add_schema_legacy_success(self, ops):
+class TestAddSchema:
+    def test_add_schema_success(self, ops):
         schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "$id": "gts://gts.x.test._.legacy.v1~",
             "type": "object",
         }
-        result = ops.add_schema("gts.x.test._.legacy.v1~", schema)
+        result = ops.add_schema(schema)
         assert result.ok is True
-        assert result.id == "gts.x.test._.legacy.v1~"
+        assert result.type_id == "gts.x.test._.legacy.v1~"
 
-    def test_add_schema_legacy_changed_content_is_conflict(self, ops):
+    def test_add_schema_changed_content_is_conflict(self, ops):
         dialect = "http://json-schema.org/draft-07/schema#"
         schema_id = "gts://gts.x.test._.legacy.v1~"
         assert (
             ops.add_schema(
-                "gts.x.test._.legacy.v1~",
                 {"$schema": dialect, "$id": schema_id, "type": "object"},
             ).ok
             is True
         )
         result = ops.add_schema(
-            "gts.x.test._.legacy.v1~",
             {"$schema": dialect, "$id": schema_id, "type": "string"},
         )
 
         assert result.ok is False
         assert result.conflict is True
 
-    def test_add_schema_legacy_failure(self, ops):
-        result = ops.add_schema("gts.x.test._.legacy.v1", {"type": "object"})
+    def test_add_schema_missing_id_failure(self, ops):
+        result = ops.add_schema({"type": "object"})
         assert result.ok is False
-        assert result.error
+        assert "$id" in result.error
+
+    def test_add_schemas_batch_partial(self, ops):
+        dialect = "http://json-schema.org/draft-07/schema#"
+        result = ops.add_schemas(
+            [
+                {
+                    "$schema": dialect,
+                    "$id": "gts://gts.x.test._.batch_ok.v1~",
+                    "type": "object",
+                },
+                {"$schema": dialect, "type": "object"},
+            ]
+        )
+        assert result.ok is False
+        assert result.results[0].ok is True
+        assert result.results[0].type_id == "gts.x.test._.batch_ok.v1~"
+        assert result.results[1].ok is False
 
 
 class TestValidateId:

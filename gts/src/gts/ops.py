@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path as SysPath
 from typing import Any
 
-from ._naming import looks_like_gts
+from ._naming import looks_like_gts, strip_scheme
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
 from .gts import GtsID, GtsWildcard
@@ -291,20 +291,32 @@ class GtsAddEntitiesResult:
 
 @dataclass
 class GtsAddSchemaResult:
-    """Result of adding a schema to the store."""
+    """Result of adding a single GTS Type Schema to the store."""
 
     ok: bool
-    id: str = ""
+    type_id: str | None = None
     error: str = ""
     conflict: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"ok": self.ok}
-        if self.ok:
-            result["id"] = self.id
-        else:
+        result: dict[str, Any] = {"ok": self.ok, "type_id": self.type_id}
+        if not self.ok:
             result["error"] = self.error
         return result
+
+
+@dataclass
+class GtsAddSchemasResult:
+    """Result of registering a batch of GTS Type Schemas."""
+
+    ok: bool
+    results: list[GtsAddSchemaResult]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "results": [r.to_dict() for r in self.results],
+        }
 
 
 @dataclass
@@ -476,7 +488,28 @@ class GtsOps:
         ok = all(r.ok for r in results)
         return GtsAddEntitiesResult(ok=ok, results=results)
 
-    def add_schema(self, type_id: str, schema: dict[str, Any]) -> GtsAddSchemaResult:
+    def add_schemas(
+        self, schemas: builtins.list[dict[str, Any]]
+    ) -> GtsAddSchemasResult:
+        """Register a batch of GTS Type Schemas.
+
+        Each entry's GTS Type Identifier is derived from its embedded ``$id``;
+        the aggregate ``ok`` is ``True`` only when every entry registered.
+        """
+        results = [self.add_schema(schema) for schema in schemas]
+        ok = all(r.ok for r in results)
+        return GtsAddSchemasResult(ok=ok, results=results)
+
+    def add_schema(self, schema: dict[str, Any]) -> GtsAddSchemaResult:
+        """Register a single GTS Type Schema, deriving its type_id from ``$id``."""
+        embedded_id = schema.get("$id") if isinstance(schema, dict) else None
+        if not isinstance(embedded_id, str) or not embedded_id:
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema must contain a top-level $id in gts:// form",
+            )
+        type_id = strip_scheme(embedded_id)
         try:
             previous = self.store.get(type_id)
             if (
@@ -486,13 +519,14 @@ class GtsOps:
             ):
                 return GtsAddSchemaResult(
                     ok=False,
+                    type_id=type_id,
                     error=f"Entity '{type_id}' is already registered with different content",
                     conflict=True,
                 )
             self.store.register_schema(type_id, schema)
-            return GtsAddSchemaResult(ok=True, id=type_id)
+            return GtsAddSchemaResult(ok=True, type_id=type_id)
         except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            return GtsAddSchemaResult(ok=False, error=str(e))
+            return GtsAddSchemaResult(ok=False, type_id=type_id, error=str(e))
 
     def validate_id(self, gts_id: str) -> GtsIdValidationResult:
         # Check if it's a wildcard pattern (contains *)

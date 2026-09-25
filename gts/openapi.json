@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "GTS Server",
-    "version": "0.14.1"
+    "version": "0.15.0"
   },
   "paths": {
     "/entities": {
@@ -11,16 +11,16 @@
         "operationId": "get_entities_entities_get",
         "parameters": [
           {
+            "name": "limit",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 1000.0,
-              "minimum": 1.0,
-              "title": "Limit",
-              "default": 100
-            },
-            "name": "limit",
-            "in": "query"
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
           }
         ],
         "responses": {
@@ -30,6 +30,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Get Entities Entities Get"
                 }
               }
@@ -52,26 +53,46 @@
         "operationId": "add_entity_entities_post",
         "parameters": [
           {
+            "name": "validate",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "boolean",
-              "title": "Validate",
-              "default": false
-            },
-            "name": "validate",
-            "in": "query"
+              "default": false,
+              "title": "Validate"
+            }
+          },
+          {
+            "name": "validation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Validation"
+            }
+          },
+          {
+            "name": "gts-ref-validation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GtsRefValidationMode",
+              "default": "any-valid"
+            }
           }
         ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
+                "additionalProperties": true,
                 "title": "Body"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -101,13 +122,13 @@
         "operationId": "get_entity_entities__gts_id__get",
         "parameters": [
           {
+            "name": "gts_id",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts Id"
-            },
-            "name": "gts_id",
-            "in": "path"
+            }
           }
         ],
         "responses": {
@@ -117,6 +138,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Get Entity Entities  Gts Id  Get"
                 }
               }
@@ -144,6 +166,7 @@
             "application/json": {
               "schema": {
                 "items": {
+                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array",
@@ -175,19 +198,19 @@
         }
       }
     },
-    "/schemas": {
+    "/type-schemas": {
       "post": {
-        "summary": "Register schema by explicit type_id",
-        "operationId": "add_schema_schemas_post",
+        "summary": "Register a batch of GTS Type Schemas",
+        "operationId": "add_schemas_type_schemas_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/SchemaRegister"
-                  }
-                ],
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
                 "title": "Body"
               }
             }
@@ -222,13 +245,13 @@
         "operationId": "validate_id_validate_id_get",
         "parameters": [
           {
+            "name": "gts_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts Id"
-            },
-            "name": "gts_id",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -238,6 +261,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Validate Id Validate Id Get"
                 }
               }
@@ -264,6 +288,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "type": "object",
                 "title": "Body"
               }
@@ -277,6 +302,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Extract Id Extract Id Post"
                 }
@@ -302,13 +328,13 @@
         "operationId": "parse_parse_id_get",
         "parameters": [
           {
+            "name": "gts_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts Id"
-            },
-            "name": "gts_id",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -318,6 +344,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Parse Parse Id Get"
                 }
               }
@@ -342,22 +369,22 @@
         "operationId": "match_id_pattern_match_id_pattern_get",
         "parameters": [
           {
+            "name": "candidate",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Candidate"
-            },
-            "name": "candidate",
-            "in": "query"
+            }
           },
           {
+            "name": "pattern",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Pattern"
-            },
-            "name": "pattern",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -367,6 +394,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Match Id Pattern Match Id Pattern Get"
                 }
               }
@@ -391,13 +419,13 @@
         "operationId": "id_to_uuid_uuid_get",
         "parameters": [
           {
+            "name": "gts_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts Id"
-            },
-            "name": "gts_id",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -407,6 +435,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Id To Uuid Uuid Get"
                 }
               }
@@ -429,15 +458,63 @@
       "post": {
         "summary": "Validate instance by GTS ID",
         "operationId": "validate_instance_validate_instance_post",
+        "parameters": [
+          {
+            "name": "gts-ref-validation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GtsRefValidationMode",
+              "default": "any-valid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateInstanceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Validate Instance Validate Instance Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validate-json": {
+      "post": {
+        "summary": "Validate unregistered JSON entity",
+        "operationId": "validate_json_validate_json_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/ValidateInstanceRequest"
-                  }
-                ],
+                "additionalProperties": true,
+                "type": "object",
                 "title": "Body"
               }
             }
@@ -450,8 +527,164 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "type": "object",
-                  "title": "Response Validate Instance Validate Instance Post"
+                  "title": "Response Validate Json Validate Json Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validate-json/{gts_type}": {
+      "post": {
+        "summary": "Validate unregistered JSON instance against a type",
+        "operationId": "validate_json_as_type_validate_json__gts_type__post",
+        "parameters": [
+          {
+            "name": "gts_type",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gts Type"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Validate Json As Type Validate Json  Gts Type  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validate-type-schema": {
+      "post": {
+        "summary": "Validate that a derived GTS Type Schema correctly extends its base chain",
+        "operationId": "validate_type_schema_validate_type_schema_post",
+        "parameters": [
+          {
+            "name": "gts-ref-validation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GtsRefValidationMode",
+              "default": "any-valid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateTypeSchemaRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Validate Type Schema Validate Type Schema Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/validate-entity": {
+      "post": {
+        "summary": "Validate entity (instance or type schema) by GTS Identifier",
+        "operationId": "validate_entity_validate_entity_post",
+        "parameters": [
+          {
+            "name": "gts-ref-validation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/GtsRefValidationMode",
+              "default": "any-valid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateEntityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Validate Entity Validate Entity Post"
                 }
               }
             }
@@ -475,13 +708,13 @@
         "operationId": "schema_graph_resolve_relationships_get",
         "parameters": [
           {
+            "name": "gts_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts Id"
-            },
-            "name": "gts_id",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -491,6 +724,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Schema Graph Resolve Relationships Get"
                 }
               }
@@ -511,26 +745,26 @@
     },
     "/compatibility": {
       "get": {
-        "summary": "Check minor version compatibility",
+        "summary": "Check Type Schema evolution compatibility",
         "operationId": "compatibility_compatibility_get",
         "parameters": [
           {
+            "name": "old_type_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Old Schema Id"
-            },
-            "name": "old_schema_id",
-            "in": "query"
+              "title": "Old Type Id"
+            }
           },
           {
+            "name": "new_type_id",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "New Schema Id"
-            },
-            "name": "new_schema_id",
-            "in": "query"
+              "title": "New Type Id"
+            }
           }
         ],
         "responses": {
@@ -540,6 +774,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Compatibility Compatibility Get"
                 }
               }
@@ -566,12 +801,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/CastRequest"
-                  }
-                ],
-                "title": "Body"
+                "$ref": "#/components/schemas/CastRequest"
               }
             }
           },
@@ -583,6 +813,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Cast Cast Post"
                 }
@@ -608,25 +839,25 @@
         "operationId": "query_query_get",
         "parameters": [
           {
+            "name": "expr",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Expr"
-            },
-            "name": "expr",
-            "in": "query"
+            }
           },
           {
+            "name": "limit",
+            "in": "query",
             "required": false,
             "schema": {
               "type": "integer",
-              "maximum": 1000.0,
-              "minimum": 1.0,
-              "title": "Limit",
-              "default": 100
-            },
-            "name": "limit",
-            "in": "query"
+              "maximum": 1000,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
           }
         ],
         "responses": {
@@ -636,6 +867,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Query Query Get"
                 }
               }
@@ -660,13 +892,13 @@
         "operationId": "attr_attr_get",
         "parameters": [
           {
+            "name": "gts_with_path",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string",
               "title": "Gts With Path"
-            },
-            "name": "gts_with_path",
-            "in": "query"
+            }
           }
         ],
         "responses": {
@@ -676,6 +908,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
+                  "additionalProperties": true,
                   "title": "Response Attr Attr Get"
                 }
               }
@@ -703,17 +936,26 @@
             "type": "string",
             "title": "Instance Id"
           },
-          "to_schema_id": {
+          "to_type_id": {
             "type": "string",
-            "title": "To Schema Id"
+            "title": "To Type Id"
           }
         },
         "type": "object",
         "required": [
           "instance_id",
-          "to_schema_id"
+          "to_type_id"
         ],
         "title": "CastRequest"
+      },
+      "GtsRefValidationMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "any-present",
+          "any-valid"
+        ],
+        "title": "GtsRefValidationMode"
       },
       "HTTPValidationError": {
         "properties": {
@@ -728,23 +970,33 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
-      "SchemaRegister": {
+      "ValidateEntityRequest": {
         "properties": {
-          "type_id": {
-            "type": "string",
-            "title": "Type Id"
+          "entity_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Id"
           },
-          "schema": {
-            "type": "object",
-            "title": "Schema"
+          "gts_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gts Id"
           }
         },
         "type": "object",
-        "required": [
-          "type_id",
-          "schema"
-        ],
-        "title": "SchemaRegister"
+        "title": "ValidateEntityRequest"
       },
       "ValidateInstanceRequest": {
         "properties": {
@@ -758,6 +1010,19 @@
           "instance_id"
         ],
         "title": "ValidateInstanceRequest"
+      },
+      "ValidateTypeSchemaRequest": {
+        "properties": {
+          "type_id": {
+            "type": "string",
+            "title": "Type Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_id"
+        ],
+        "title": "ValidateTypeSchemaRequest"
       },
       "ValidationError": {
         "properties": {

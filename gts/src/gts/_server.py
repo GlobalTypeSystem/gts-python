@@ -146,11 +146,6 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class SchemaRegister(BaseModel):
-    type_id: str
-    type_schema: dict[str, Any]
-
-
 class CastRequest(BaseModel):
     instance_id: str
     to_type_id: str
@@ -193,7 +188,7 @@ class GtsHttpServer:
         self.host = host
         self.port = port
         self.base_url = f"http://{self.host}:{self.port}"
-        self.app = FastAPI(title="GTS Server", version="0.14.1")
+        self.app = FastAPI(title="GTS Server", version="0.15.0")
         self.app.add_middleware(
             _RequestLoggingMiddleware,
             verbose=self.ops.verbose,
@@ -235,9 +230,9 @@ class GtsHttpServer:
         )
         app.add_api_route(
             "/type-schemas",
-            self.add_schema,
+            self.add_schemas,
             methods=["POST"],
-            summary="Register a GTS Type Schema under an explicit type_id",
+            summary="Register a batch of GTS Type Schemas",
             response_class=JSONResponse,
         )
 
@@ -367,11 +362,11 @@ class GtsHttpServer:
     ) -> JSONResponse:
         return JSONResponse(self.ops.add_entities(body).to_dict())
 
-    async def add_schema(self, body: SchemaRegister) -> JSONResponse:
-        result = self.ops.add_schema(body.type_id, body.type_schema)
-        return JSONResponse(
-            result.to_dict(), status_code=409 if result.conflict else 200
-        )
+    async def add_schemas(
+        self,
+        body: list[dict[str, Any]] = Body(...),
+    ) -> JSONResponse:
+        return JSONResponse(self.ops.add_schemas(body).to_dict())
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.validate_id(id).to_dict()

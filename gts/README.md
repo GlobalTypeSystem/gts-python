@@ -2,7 +2,7 @@
 
 Python helpers and a reference HTTP service for the [Global Type System (GTS)](https://github.com/globaltypesystem/gts-spec). The package supports GTS identifier parsing, JSON Schema-backed validation, schema compatibility and derivation checks, traits, casting, queries, file loading, a CLI, and a FastAPI application.
 
-The package targets GTS specification v0.14.1 and requires Python 3.9 or later.
+The package targets GTS specification v0.14.2 and requires Python 3.9 or later.
 
 ## Installation
 
@@ -185,7 +185,7 @@ ops.reload_from_path("replacement-directory")
 
 ops.add_entity(content, validate=False)
 ops.add_entities([content_a, content_b])
-ops.add_schema(type_id, schema)
+ops.add_schemas([schema_a, schema_b])
 ops.extract_id(content)
 ops.validate_id(gts_id)
 ops.parse_id(gts_id)
@@ -268,7 +268,7 @@ app = GtsHttpServer(ops=GtsOps()).app
 | `/entities/{gts_id}` | `GET` | Retrieves one entity. |
 | `/entities` | `POST` | Entity/schema body; optional `validate=true` runs full validation. Failed registration returns 422 and is rolled back. |
 | `/entities/bulk` | `POST` | JSON array of entity/schema objects. |
-| `/type-schemas` | `POST` | `{"type_id": "...~", "type_schema": {...}}`. |
+| `/type-schemas` | `POST` | JSON array of GTS Type Schema objects (batch); each entry's `type_id` is derived from its embedded `$id`. Returns `{"ok": ..., "results": [{"ok": ..., "type_id": ..., "error": ...}]}`. |
 | `/validate-id` | `GET` | `gts_id` query parameter. |
 | `/extract-id` | `POST` | JSON entity/schema object. |
 | `/parse-id` | `GET` | `gts_id` query parameter. |
