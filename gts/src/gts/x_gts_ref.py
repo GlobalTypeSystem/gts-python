@@ -419,7 +419,7 @@ class XGtsRefValidator:
         self, pattern: str, field_path: str
     ) -> XGtsRefValidationError | None:
         """Validate a GTS ID or pattern in schema definition."""
-        if pattern == "gts.*":
+        if pattern == GTS_PREFIX + "*":
             return None  # Valid wildcard
 
         if "*" in pattern:
@@ -465,7 +465,7 @@ class XGtsRefValidator:
             )
 
         # Check pattern match
-        if pattern == "gts.*":
+        if pattern == GTS_PREFIX + "*":
             pass  # Any valid GTS ID matches
         elif pattern.endswith("*"):
             prefix = pattern[:-1]

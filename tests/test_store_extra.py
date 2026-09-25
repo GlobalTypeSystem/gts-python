@@ -740,3 +740,71 @@ class TestValidateSchemaFullFlow:
         store = GtsStore(reader=None)
         with pytest.raises(StoreGtsObjectNotFound):
             store.validate_instance("totally-not-valid")
+
+
+class TestSubschemaDialect:
+    def test_nested_schema_switching_dialect_is_rejected(self):
+        schema_id = "gts.x.test._.nested_dialect.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "properties": {
+                    "inner": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        with pytest.raises(ValueError, match="must not change JSON Schema dialect"):
+            store.validate_schema(schema_id)
+
+    def test_nested_schema_restating_dialect_is_allowed(self):
+        schema_id = "gts.x.test._.nested_same_dialect.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "properties": {
+                    "inner": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        store.validate_schema(schema_id)  # must not raise
+
+
+class TestExceptionHierarchy:
+    def test_not_found_errors_share_a_base(self):
+        from gts import GtsError, GtsNotFoundError
+        from gts.store import StoreGtsObjectNotFound, StoreGtsSchemaNotFound
+
+        assert issubclass(StoreGtsObjectNotFound, GtsNotFoundError)
+        assert issubclass(StoreGtsSchemaNotFound, GtsNotFoundError)
+        assert issubclass(GtsNotFoundError, GtsError)
+
+    def test_validation_error_is_value_error(self):
+        from gts import GtsError, GtsValidationError
+
+        assert issubclass(GtsValidationError, ValueError)
+        assert issubclass(GtsValidationError, GtsError)
+
+    def test_unresolvable_ref_is_catchable_as_gts_error(self):
+        from gts import GtsError
+
+        schema_id = "gts.x.test._.dangling_ref.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {"properties": {"other": {"$ref": "gts://gts.x.test._.missing.v1~"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        with pytest.raises(GtsError, match="Unresolvable \\$ref"):
+            store.validate_schema(schema_id)

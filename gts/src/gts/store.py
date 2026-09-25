@@ -13,19 +13,31 @@ from typing import Any
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from . import compatibility, derivation, traits
+from . import compatibility, derivation, schema_dialect, schema_resolver, traits
+from ._errors import (
+    GtsNotFoundError,
+    GtsUnresolvedRefError,
+    GtsValidationError,
+)
 from ._json_pointer import resolve as resolve_json_pointer
-from ._naming import looks_like_gts, strip_scheme, with_scheme
+from ._naming import (
+    GTS_PREFIX,
+    GTS_URI_PREFIX,
+    looks_like_gts,
+    strip_scheme,
+    with_scheme,
+)
 from .entities import GtsEntity
 from .gts import GtsID, GtsRef, GtsWildcard
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_cast import GtsEntityCastResult
+
+# Re-exported for backward compatibility; the limit now lives in schema_resolver.
+from .schema_resolver import MAX_SCHEMA_REF_EXPANSIONS  # noqa: F401
 from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
 
 logger = logging.getLogger(__name__)
-
-MAX_SCHEMA_REF_EXPANSIONS = 10_000
 
 
 def _require_schema_id(value: str) -> GtsID:
@@ -35,7 +47,7 @@ def _require_schema_id(value: str) -> GtsID:
         raise ValueError(f"ID '{value}' is not a schema (must end with '~')") from error
 
 
-class StoreGtsObjectNotFound(Exception):
+class StoreGtsObjectNotFound(GtsNotFoundError):
     """Exception raised when a GTS entity is not found in the store."""
 
     def __init__(self, entity_id: str):
@@ -43,7 +55,7 @@ class StoreGtsObjectNotFound(Exception):
         self.entity_id = entity_id
 
 
-class StoreGtsSchemaNotFound(Exception):
+class StoreGtsSchemaNotFound(GtsNotFoundError):
     """Exception raised when a GTS schema is not found in the store."""
 
     def __init__(self, entity_id: str):
@@ -51,7 +63,7 @@ class StoreGtsSchemaNotFound(Exception):
         self.entity_id = entity_id
 
 
-class StoreGtsEntityNotFound(Exception):
+class StoreGtsEntityNotFound(GtsNotFoundError):
     """Exception raised when a GTS entity is not found in the store."""
 
     def __init__(self, entity_id: str):
@@ -59,7 +71,7 @@ class StoreGtsEntityNotFound(Exception):
         self.entity_id = entity_id
 
 
-class StoreGtsSchemaForInstanceNotFound(Exception):
+class StoreGtsSchemaForInstanceNotFound(GtsNotFoundError):
     """Exception raised when a GTS schema for an instance is not found in the store."""
 
     def __init__(self, entity_id: str):
@@ -69,7 +81,7 @@ class StoreGtsSchemaForInstanceNotFound(Exception):
         self.entity_id = entity_id
 
 
-class StoreGtsCastFromSchemaNotAllowed(Exception):
+class StoreGtsCastFromSchemaNotAllowed(GtsValidationError):
     """Exception raised when attempting to cast from a schema ID."""
 
     def __init__(self, from_id: str):
@@ -197,7 +209,9 @@ class GtsStore:
         if not isinstance(dialect, str) or not dialect:
             raise ValueError("Type Schema must contain a top-level $schema field")
         embedded_id = schema.get("$id")
-        if not isinstance(embedded_id, str) or not embedded_id.startswith("gts://gts."):
+        if not isinstance(embedded_id, str) or not embedded_id.startswith(
+            GTS_URI_PREFIX + GTS_PREFIX
+        ):
             raise ValueError("Type Schema must contain a top-level $id in gts:// form")
         try:
             normalized_id = GtsID.parse_type(strip_scheme(embedded_id))
@@ -264,7 +278,10 @@ class GtsStore:
     def items(self):
         """Return all entity ID and entity pairs."""
         with self._lock:
-            return tuple((entity_id, copy.deepcopy(entity)) for entity_id, entity in self._by_id.items())
+            return tuple(
+                (entity_id, copy.deepcopy(entity))
+                for entity_id, entity in self._by_id.items()
+            )
 
     def keys(self) -> tuple[str, ...]:
         with self._lock:
@@ -340,7 +357,7 @@ class GtsStore:
                     try:
                         target = self.get_schema_content(ref.target_id)
                     except KeyError as error:
-                        raise ValueError(
+                        raise GtsUnresolvedRefError(
                             f"Unresolvable $ref at '{current_path}': '{ref_uri}'"
                         ) from error
                     if ref.target_id not in visited:
@@ -443,27 +460,11 @@ class GtsStore:
 
     @staticmethod
     def _schema_dialect(schema: dict[str, Any]) -> str:
-        dialect = schema.get("$schema")
-        if not isinstance(dialect, str) or not dialect:
-            raise ValueError("$schema must declare a supported JSON Schema dialect")
-        normalized = dialect.removesuffix("#").lower().replace("https://", "http://", 1)
-        supported = {
-            "http://json-schema.org/draft-07/schema": "draft-07",
-            "http://json-schema.org/draft/2019-09/schema": "2019-09",
-            "http://json-schema.org/draft/2020-12/schema": "2020-12",
-        }
-        try:
-            return supported[normalized]
-        except KeyError as error:
-            raise ValueError(f"Unsupported JSON Schema dialect: {dialect}") from error
+        return schema_dialect.document_dialect(schema)
 
     @staticmethod
     def _schema_dialect_uri(schema: dict[str, Any]) -> str:
-        return {
-            "draft-07": "http://json-schema.org/draft-07/schema#",
-            "2019-09": "https://json-schema.org/draft/2019-09/schema",
-            "2020-12": "https://json-schema.org/draft/2020-12/schema",
-        }[GtsStore._schema_dialect(schema)]
+        return schema_dialect.dialect_uri(schema)
 
     def _validate_local_ref_dialects(
         self, schema: dict[str, Any], root_id: str, root_dialect: str
@@ -568,7 +569,7 @@ class GtsStore:
         segments = gid.gts_id_segments
 
         chain_ids = []
-        prefix = "gts."
+        prefix = GTS_PREFIX
         for seg in segments:
             chain_ids.append(prefix + seg.segment)
             prefix = prefix + seg.segment
@@ -633,25 +634,16 @@ class GtsStore:
                 )
 
     def _resolve_schema_refs(self, schema: Any) -> Any:
-        """Resolve $ref references in a schema by inlining referenced schemas.
+        """Resolve external ``$ref`` targets by inlining them from the store.
 
-        References are inlined recursively so that a schema reached through an
-        intermediate (A referenced via A~B) is fully expanded. Cyclic
-        references are left unresolved: the surviving $ref makes the effective
-        schema unprovable, which is the intended admission failure.
+        Thin adapter over :func:`schema_resolver.resolve_schema_refs`, passing
+        the store's :meth:`get_schema_content` as the reference provider.
         """
-        import copy
-
-        return self._inline_refs(
-            copy.deepcopy(schema), set(), self._supports_ref_siblings(schema), [0]
-        )
+        return schema_resolver.resolve_schema_refs(schema, self.get_schema_content)
 
     @staticmethod
     def _supports_ref_siblings(schema: Any) -> bool:
-        dialect = schema.get("$schema") if isinstance(schema, dict) else None
-        return isinstance(dialect, str) and (
-            "/draft/2019-09/" in dialect or "/draft/2020-12/" in dialect
-        )
+        return schema_dialect.supports_ref_siblings(schema)
 
     def _inline_refs(
         self,
@@ -660,58 +652,10 @@ class GtsStore:
         supports_ref_siblings: bool,
         expansions: list[int] | None = None,
     ) -> Any:
-        """Recursively inline $ref references, guarding against cycles."""
-        expansions = expansions if expansions is not None else [0]
-        if isinstance(node, dict):
-            ref_uri = node.get("$ref")
-            if isinstance(ref_uri, str):
-                ref = GtsRef.parse(ref_uri)
-                # Local (#/...) refs are resolved by JSON Schema itself; only
-                # external targets are inlined from the store.
-                ref_id = None if ref.is_local else ref.target_id
-                if ref_id is not None:
-                    if ref_id in seen:
-                        # Cycle detected: leave the $ref unresolved.
-                        return node
-                    expansions[0] += 1
-                    if expansions[0] > MAX_SCHEMA_REF_EXPANSIONS:
-                        raise ValueError(
-                            f"schema reference expansion exceeds limit of {MAX_SCHEMA_REF_EXPANSIONS}"
-                        )
-                    try:
-                        ref_schema = self.get_schema_content(ref_id)
-                    except KeyError:
-                        return node  # Leave unresolved
-                    import copy
-
-                    resolved = self._inline_refs(
-                        copy.deepcopy(ref_schema),
-                        seen | {ref_id},
-                        self._supports_ref_siblings(ref_schema),
-                        expansions,
-                    )
-                    if supports_ref_siblings and len(node) > 1:
-                        siblings = {
-                            key: value for key, value in node.items() if key != "$ref"
-                        }
-                        return {
-                            "allOf": [
-                                resolved,
-                                self._inline_refs(
-                                    siblings, seen, supports_ref_siblings, expansions
-                                ),
-                            ]
-                        }
-                    return resolved
-            return {
-                key: self._inline_refs(value, seen, supports_ref_siblings, expansions)
-                for key, value in node.items()
-            }
-        if isinstance(node, list):
-            return [
-                self._inline_refs(item, seen, supports_ref_siblings, expansions) for item in node
-            ]
-        return node
+        """Recursively inline ``$ref`` references, guarding against cycles."""
+        return schema_resolver.inline_refs(
+            node, seen, supports_ref_siblings, self.get_schema_content, expansions
+        )
 
     def _build_effective_traits(
         self, gts_id: str, transient_schema: dict[str, Any] | None = None
@@ -721,7 +665,7 @@ class GtsStore:
         segments = gid.gts_id_segments
 
         chain_ids: list[str] = []
-        prefix = "gts."
+        prefix = GTS_PREFIX
         for seg in segments:
             chain_ids.append(prefix + seg.segment)
             prefix = prefix + seg.segment
@@ -858,6 +802,9 @@ class GtsStore:
             )
 
         self._schema_dialect(schema_content)
+        # A subschema may not switch JSON Schema dialect (spec sec 11); the whole
+        # type is read under the dialect its top-level $schema selects.
+        schema_dialect.check_subschemas(schema_content)
         logger.info(f"Validating schema {schema_id.id}")
         self._validate_schema_refs(schema_content, "")
         self._validate_schema_ref_targets(schema_content)
@@ -968,7 +915,7 @@ class GtsStore:
                         )
 
             chain_ids: list[str] = []
-            prefix = "gts."
+            prefix = GTS_PREFIX
             for segment in schema_id.gts_id_segments:
                 chain_ids.append(prefix + segment.segment)
                 prefix += segment.segment
@@ -1025,7 +972,7 @@ class GtsStore:
             )
             if (
                 isinstance(x_gts_ref, str)
-                and x_gts_ref.startswith("gts.")
+                and x_gts_ref.startswith(GTS_PREFIX)
                 and "*" not in x_gts_ref
             ):
                 yield x_gts_ref, True
@@ -1292,6 +1239,22 @@ class GtsStore:
         # Determine direction
         direction = GtsEntityCastResult._infer_direction(old_schema_id, new_schema_id)
 
+        # Surface *why* a direction failed and classify the candidate's object
+        # levels so a caller can see whether a level can still gain optional
+        # properties later (spec sec 4.4). Reasons are derived from the verdicts
+        # already computed above (no second inclusion pass), so they never
+        # contradict the verdict.
+        differing_dialects = compatibility.dialects_differ(old_resolved, new_resolved)
+        backward_errors = compatibility.explain_verdict(
+            backward, backward=True, differing_dialects=differing_dialects
+        )
+        forward_errors = compatibility.explain_verdict(
+            forward, backward=False, differing_dialects=differing_dialects
+        )
+        # Union the directional reasons for the summary, dropping the duplicate
+        # a single shared cause (e.g. differing dialects) would produce.
+        incompatibility_reasons = list(dict.fromkeys(backward_errors + forward_errors))
+
         return GtsEntityCastResult(
             from_id=old_schema_id,
             to_id=new_schema_id,
@@ -1302,20 +1265,21 @@ class GtsStore:
             is_fully_compatible=full == compatibility.COMPATIBLE,
             is_backward_compatible=backward == compatibility.COMPATIBLE,
             is_forward_compatible=forward == compatibility.COMPATIBLE,
-            incompatibility_reasons=[],
-            backward_errors=[],
-            forward_errors=[],
+            incompatibility_reasons=incompatibility_reasons,
+            backward_errors=backward_errors,
+            forward_errors=forward_errors,
             casted_entity=None,
             backward_verdict=backward,
             forward_verdict=forward,
             full_verdict=full,
+            candidate_object_levels=compatibility.classify_object_levels(new_resolved),
         )
 
-    def build_schema_graph(self, gts_id: str) -> tuple[dict[str, set[str]], list[str]]:
-        seen_gts_ids = set()
+    def build_schema_graph(self, gts_id: str) -> dict[str, Any]:
+        seen_gts_ids: set[str] = set()
 
-        def gts2node(gts_id: str, seen_gts_ids: set[str]) -> str:
-            ret = {"id": gts_id}
+        def gts2node(gts_id: str, seen_gts_ids: set[str]) -> dict[str, Any]:
+            ret: dict[str, Any] = {"id": gts_id}
 
             if gts_id in seen_gts_ids:
                 return ret
@@ -1324,7 +1288,7 @@ class GtsStore:
 
             entity = self.get(gts_id)
             if entity:
-                refs = {}
+                refs: dict[str, Any] = {}
                 for r in entity.gts_refs:
                     if r["id"] == gts_id:
                         continue
