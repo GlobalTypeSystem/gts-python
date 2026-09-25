@@ -102,6 +102,23 @@ class TestRegisterEdgeCases:
         items["gts.x.test._.copy.v1~"].content["type"] = "boolean"
         assert store.get("gts.x.test._.copy.v1~").content["type"] == "object"
 
+    def test_reference_registry_is_cached_and_invalidated_by_schema_changes(self):
+        store = GtsStore(reader=None)
+        store.register(_schema_entity("gts.x.test._.cached.v1~"))
+        first = store._create_reference_registry()
+        second = store._create_reference_registry()
+        assert first is second
+
+        instance = GtsEntity(
+            content={"id": "gts.x.test._.cached.v1~x.test._.i.v1.0"},
+            gts_id=GtsID("gts.x.test._.cached.v1~x.test._.i.v1.0"),
+        )
+        store.register(instance)
+        assert store._create_reference_registry() is first
+
+        store.register(_schema_entity("gts.x.test._.cached2.v1~"))
+        assert store._create_reference_registry() is not first
+
     def test_transaction_serializes_writers(self):
         store = GtsStore(reader=None)
         entered = threading.Event()

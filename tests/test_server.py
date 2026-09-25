@@ -6,10 +6,8 @@ import asyncio
 
 import pytest
 from fastapi.responses import JSONResponse
-
-from gts.ops import GtsOps
 from gts._server import GtsHttpServer, ValidateEntityRequest, _RequestLoggingMiddleware
-
+from gts.ops import GtsOps
 
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -237,6 +235,27 @@ class TestHandlers:
 
 
 class TestRequestLoggingMiddlewareVerboseOff:
+    def test_verbose_logging_does_not_read_or_log_bodies(self, server, caplog):
+        class URL:
+            path = "/entities"
+
+        class Request:
+            method = "POST"
+            url = URL()
+
+            async def body(self):
+                raise AssertionError("request body must not be read by logging middleware")
+
+        middleware = _RequestLoggingMiddleware(server.app, verbose=2)
+
+        async def call_next(request):
+            return JSONResponse({"secret": "must-not-be-logged"})
+
+        with caplog.at_level("DEBUG"):
+            result = run(middleware.dispatch(request=Request(), call_next=call_next))
+        assert result.headers["connection"] == "close"
+        assert "must-not-be-logged" not in caplog.text
+
     def test_dispatch_skips_when_not_verbose(self, server):
         middleware = _RequestLoggingMiddleware(server.app, verbose=0)
 

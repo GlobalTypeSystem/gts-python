@@ -3,6 +3,8 @@
 import pytest
 from gts.ops import GtsOps
 
+from gts import GtsOps as PublicGtsOps
+
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "gts://gts.x.test._.foo.v1~",
@@ -24,6 +26,9 @@ def ops():
 
 
 class TestConstructionAndConfig:
+    def test_high_level_facade_is_exported(self):
+        assert PublicGtsOps is GtsOps
+
     def test_default_config_used_when_no_path(self, ops):
         assert "$id" in ops.cfg.entity_id_fields
 

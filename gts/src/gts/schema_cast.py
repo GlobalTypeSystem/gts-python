@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jsonschema import exceptions as js_exceptions
+from referencing import Registry
 
 from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
@@ -399,7 +400,9 @@ class GtsEntityCastResult:
         modified_schema = GtsEntityCastResult._remove_gts_const_constraints(schema)
 
         validator_class = validator_for(modified_schema)
-        if resolver is not None:
+        if isinstance(resolver, Registry):
+            validator = validator_class(modified_schema, registry=resolver)
+        elif resolver is not None:
             validator = validator_class(modified_schema, resolver=resolver)
         else:
             validator = validator_class(modified_schema)

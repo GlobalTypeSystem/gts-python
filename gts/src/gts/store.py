@@ -5,11 +5,11 @@ import logging
 import threading
 import uuid
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from jsonschema import RefResolver
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
@@ -119,7 +119,7 @@ class GtsStoreQueryResult:
 
 
 class GtsStore:
-    def __init__(self, reader: GtsReader) -> None:
+    def __init__(self, reader: GtsReader | None = None) -> None:
         """
         Initialize GtsStore with an optional GtsReader.
 
@@ -129,6 +129,7 @@ class GtsStore:
         self._by_id: dict[str, GtsEntity] = {}
         self._reader = reader
         self._lock = threading.RLock()
+        self._reference_registry: Registry | None = None
 
         # Populate entities from reader if provided
         if self._reader:
@@ -144,6 +145,10 @@ class GtsStore:
         for entity in self._reader:
             if entity.gts_id and entity.gts_id.id:
                 self._by_id[entity.gts_id.id] = copy.deepcopy(entity)
+        self._reference_registry = None
+
+    def _invalidate_reference_registry(self) -> None:
+        self._reference_registry = None
 
     def register(self, entity: GtsEntity) -> None:
         """Register a GtsEntity in the store.
@@ -167,11 +172,15 @@ class GtsStore:
                 self._by_id[stored.raw_id] = stored
             else:
                 raise ValueError("Entity must have a valid gts_id or raw_id")
+            if stored.is_schema:
+                self._invalidate_reference_registry()
 
     def unregister(self, entity_id: str) -> None:
         """Remove an entity from the in-memory registry if it is present."""
         with self._lock:
-            self._by_id.pop(entity_id, None)
+            removed = self._by_id.pop(entity_id, None)
+            if removed is not None and removed.is_schema:
+                self._invalidate_reference_registry()
 
     @contextmanager
     def transaction(self):
@@ -201,6 +210,7 @@ class GtsStore:
         entity = GtsEntity(content=copy.deepcopy(schema), gts_id=gts_id, is_schema=True)
         with self._lock:
             self._by_id[gts_id.id] = entity
+            self._invalidate_reference_registry()
 
     def get(self, entity_id: str) -> GtsEntity | None:
         """
@@ -223,6 +233,8 @@ class GtsStore:
                 if entity:
                     stored = copy.deepcopy(entity)
                     self._by_id[entity_id] = stored
+                    if stored.is_schema:
+                        self._invalidate_reference_registry()
                     return copy.deepcopy(stored)
 
             return None
@@ -234,46 +246,33 @@ class GtsStore:
             return entity.content
         raise KeyError(f"Schema not found: {type_id}")
 
-    def _create_ref_resolver(self, schema: dict[str, Any]) -> RefResolver:
-        """Create a custom RefResolver that can resolve GTS ID references from the store."""
-
-        def resolve_gts_ref(uri: str) -> dict[str, Any]:
-            """Resolve a GTS ID reference to its schema content.
-
-            ``get_schema_content`` normalizes the ``gts://`` scheme internally.
-            """
-            try:
-                return self.get_schema_content(uri)
-            except KeyError as e:
-                raise ValueError(f"Unresolvable: {strip_scheme(uri)}") from e
-
-        # Create a store dict that maps GTS IDs to their schema content
-        store = {}
-        for entity_id, entity in self.items():
-            if entity.is_schema and isinstance(entity.content, dict):
-                store[entity_id] = entity.content
-
-        # Create RefResolver with custom handlers
-        # Issue #32: Support "gts" scheme
-        handlers = {"": resolve_gts_ref, "gts": resolve_gts_ref}
-        resolver = RefResolver.from_schema(schema, store=store, handlers=handlers)
-        return resolver
-
     def _create_reference_registry(self) -> Registry:
-        registry = Registry()
-        for entity_id, entity in self.items():
-            if entity.is_schema and isinstance(entity.content, dict):
-                resource = Resource.from_contents(
-                    _without_x_gts_ref(entity.content),
-                    default_specification=DRAFT202012,
-                )
-                registry = registry.with_resource(with_scheme(entity_id), resource)
-        return registry
+        with self._lock:
+            if self._reference_registry is not None:
+                return self._reference_registry
+            registry = Registry()
+            for entity_id, entity in self._by_id.items():
+                if entity.is_schema and isinstance(entity.content, dict):
+                    resource = Resource.from_contents(
+                        _without_x_gts_ref(entity.content),
+                        default_specification=DRAFT202012,
+                    )
+                    registry = registry.with_resource(with_scheme(entity_id), resource)
+            self._reference_registry = registry
+            return registry
 
     def items(self):
         """Return all entity ID and entity pairs."""
         with self._lock:
             return tuple((entity_id, copy.deepcopy(entity)) for entity_id, entity in self._by_id.items())
+
+    def keys(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._by_id)
+
+    def values(self) -> tuple[GtsEntity, ...]:
+        with self._lock:
+            return tuple(copy.deepcopy(entity) for entity in self._by_id.values())
 
     @staticmethod
     def _validate_schema_refs(schema: dict[str, Any], path: str = "") -> None:
@@ -523,7 +522,7 @@ class GtsStore:
                 self._validate_local_ref_dialects(content, chain_ids[0], root_dialect)
 
         visited: set[str] = set()
-        queue: list[tuple[str, dict[str, Any]]] = (
+        queue: deque[tuple[str, dict[str, Any]]] = deque(
             [(gts_id, transient_schema)] if transient_schema is not None else []
         )
         if not queue:
@@ -531,7 +530,7 @@ class GtsStore:
             if entity and isinstance(entity.content, dict):
                 queue.append((gts_id, entity.content))
         while queue:
-            current_id, content = queue.pop(0)
+            current_id, content = queue.popleft()
             if current_id in visited:
                 continue
             visited.add(current_id)
@@ -1058,7 +1057,7 @@ class GtsStore:
         gts_ref_validation: GtsRefValidationMode,
     ) -> bool:
         wildcard = GtsWildcard(pattern)
-        for entity_id, _ in self.items():
+        for entity_id in self.keys():
             try:
                 if not GtsID(entity_id).wildcard_match(wildcard):
                     continue
@@ -1236,9 +1235,9 @@ class GtsStore:
                 raise StoreGtsObjectNotFound(from_schema_id)
 
         # Create a resolver to handle $ref in schemas
-        resolver = self._create_ref_resolver(to_schema.content)
+        registry = self._create_reference_registry()
 
-        return from_entity.cast(to_schema, from_schema, resolver=resolver)
+        return from_entity.cast(to_schema, from_schema, resolver=registry)
 
     def is_minor_compatible(
         self,
@@ -1509,7 +1508,7 @@ class GtsStore:
             return result
 
         # Filter entities
-        for _, entity in self.items():
+        for entity in self.values():
             if len(result.results) >= limit:
                 break
             if not isinstance(entity.content, dict) or not entity.gts_id:
