@@ -502,6 +502,8 @@ class GtsStore:
             return
         root_dialect = self._schema_dialect(root_content)
 
+        visited: set[str] = set()
+        queue: deque[tuple[str, dict[str, Any]]] = deque()
         for chain_id in chain_ids:
             entity = self.get(chain_id)
             content = (
@@ -521,15 +523,12 @@ class GtsStore:
                         "$id hierarchy must use the root type's dialect"
                     )
                 self._validate_local_ref_dialects(content, chain_ids[0], root_dialect)
-
-        visited: set[str] = set()
-        queue: deque[tuple[str, dict[str, Any]]] = deque(
-            [(gts_id, transient_schema)] if transient_schema is not None else []
-        )
-        if not queue:
-            entity = self.get(gts_id)
-            if entity and isinstance(entity.content, dict):
-                queue.append((gts_id, entity.content))
+                # Seed the reference walk from every chain member, not just the
+                # leaf, so a cross-dialect gts:// $ref on an ancestor is caught
+                # even when the leaf does not reference it (spec §11.0/§12;
+                # matches the Rust reference which validates each related type in
+                # the closure).
+                queue.append((chain_id, content))
         while queue:
             current_id, content = queue.popleft()
             if current_id in visited:

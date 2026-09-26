@@ -452,6 +452,60 @@ class TestValidateSchemaChain:
         with pytest.raises(ValueError, match="gts.x.test._.foreign.v1~"):
             store._validate_schema_chain("gts.x.test._.host.v1~")
 
+    def test_ancestor_ref_dialect_mismatch_raises(self):
+        # Issue C: the cross-dialect $ref lives on an ancestor; the descendant
+        # derives by re-declaration and references neither the ancestor nor the
+        # 2020-12 target. A leaf-only reference walk would accept it; walking the
+        # whole chain closure must reject it (OP#12 path).
+        foreign = _schema_entity(
+            "gts.x.test._.ancforeign.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        base = _schema_entity(
+            "gts.x.test._.ancbase.v1~",
+            {"properties": {"ext": {"$ref": "gts://gts.x.test._.ancforeign.v1~"}}},
+        )
+        child = _schema_entity(
+            "gts.x.test._.ancbase.v1~x.test._.ancchild.v1~",
+            {"properties": {"label": {"type": "string"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(base)
+        store.register(child)
+
+        with pytest.raises(ValueError, match="gts.x.test._.ancforeign.v1~"):
+            store._validate_schema_chain(
+                "gts.x.test._.ancbase.v1~x.test._.ancchild.v1~"
+            )
+
+    def test_instance_content_rejects_ancestor_cross_dialect_ref(self):
+        # Issue C on the OP#6 instance path: validating an instance of the
+        # descendant must reject it because an ancestor references a schema of a
+        # different dialect.
+        foreign = _schema_entity(
+            "gts.x.test._.ancforeign2.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        base = _schema_entity(
+            "gts.x.test._.ancbase2.v1~",
+            {"properties": {"ext": {"$ref": "gts://gts.x.test._.ancforeign2.v1~"}}},
+        )
+        child = _schema_entity(
+            "gts.x.test._.ancbase2.v1~x.test._.ancchild2.v1~",
+            {"properties": {"label": {"type": "string"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(base)
+        store.register(child)
+
+        with pytest.raises(ValueError, match="gts.x.test._.ancforeign2.v1~"):
+            store.validate_instance_content(
+                {"label": "ok"},
+                "gts.x.test._.ancbase2.v1~x.test._.ancchild2.v1~",
+            )
+
     def test_trait_resource_dialect_mismatch_raises(self):
         schema_id = "gts.x.test._.trait_resource.v1~"
         schema = _schema_entity(
