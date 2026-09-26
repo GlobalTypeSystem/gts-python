@@ -56,38 +56,57 @@ def _gts_pattern_violation(value: str, pattern: str) -> str | None:
     return None
 
 
-def _x_gts_ref_keyword(validator, ref_pattern, instance, schema):
-    """``jsonschema`` keyword handler that makes ``x-gts-ref`` a first-class
-    assertion, so ``oneOf``/``anyOf``/``allOf`` resolve correctly: two branches
-    that differ only by ``x-gts-ref`` are genuinely different schemas rather than
-    identical match-all schemas. This is the same design gts-go and gts-rust use
-    (a registered keyword/vocabulary) and removes the need to strip x-gts-ref and
-    rewrite ``oneOf``→``anyOf``.
+def _make_x_gts_ref_keyword(selected_type_id: str | None):
+    """Build a ``jsonschema`` keyword handler that makes ``x-gts-ref`` a
+    first-class assertion, so ``oneOf``/``anyOf``/``allOf`` resolve correctly:
+    two branches that differ only by ``x-gts-ref`` are genuinely different
+    schemas rather than identical match-all schemas. This is the same design
+    gts-go and gts-rust use (a registered keyword/vocabulary) and removes the
+    need to strip x-gts-ref and rewrite ``oneOf``→``anyOf``.
 
-    Only concrete/wildcard patterns are enforced here. The ``/$id`` self-reference
-    (needs the selected type) and registry existence stay with XGtsRefValidator.
+    ``selected_type_id`` (the type being validated) lets the ``/$id``
+    self-reference resolve here so a ``/$id`` branch matches only that type
+    instead of matching unconditionally; without it, ``/$id`` is deferred to
+    XGtsRefValidator. Registry existence always stays with XGtsRefValidator.
     """
-    if not isinstance(ref_pattern, str) or ref_pattern == X_GTS_REF_SELF:
-        return
-    if not isinstance(instance, str):
-        return
-    reason = _gts_pattern_violation(instance, strip_scheme(ref_pattern))
-    if reason is not None:
-        yield ValidationError(reason)
+
+    def _keyword(validator, ref_pattern, instance, schema):
+        if not isinstance(ref_pattern, str):
+            return
+        if not isinstance(instance, str):
+            return
+        pattern = ref_pattern
+        if ref_pattern == X_GTS_REF_SELF:
+            if not selected_type_id:
+                return
+            pattern = selected_type_id
+        reason = _gts_pattern_violation(instance, strip_scheme(pattern))
+        if reason is not None:
+            yield ValidationError(reason)
+
+    return _keyword
 
 
-_EXTENDED_VALIDATORS: dict[type, type] = {}
+# Backwards-compatible symbol: the /$id-deferring keyword (no selected type).
+_x_gts_ref_keyword = _make_x_gts_ref_keyword(None)
 
 
-def extended_validator_for(schema: Any) -> type:
+_EXTENDED_VALIDATORS: dict[tuple[type, str | None], type] = {}
+
+
+def extended_validator_for(schema: Any, selected_type_id: str | None = None) -> type:
     """Return the ``jsonschema`` validator class for ``schema``'s dialect,
     extended so ``x-gts-ref`` is evaluated as a real keyword during structural
-    validation (including inside combinators)."""
+    validation (including inside combinators). ``selected_type_id`` is threaded
+    into the keyword so ``/$id`` resolves during combinator resolution."""
     base = validator_for(schema)
-    extended = _EXTENDED_VALIDATORS.get(base)
+    key = (base, selected_type_id)
+    extended = _EXTENDED_VALIDATORS.get(key)
     if extended is None:
-        extended = extend(base, {"x-gts-ref": _x_gts_ref_keyword})
-        _EXTENDED_VALIDATORS[base] = extended
+        extended = extend(
+            base, {"x-gts-ref": _make_x_gts_ref_keyword(selected_type_id)}
+        )
+        _EXTENDED_VALIDATORS[key] = extended
     return extended
 
 

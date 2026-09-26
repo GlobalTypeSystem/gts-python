@@ -1044,7 +1044,9 @@ class GtsStore:
             **schema,
             "$schema": self._schema_dialect_uri(schema),
         }
-        validator_class = extended_validator_for(schema_for_validation)
+        validator_class = extended_validator_for(
+            schema_for_validation, selected_type_id=schema_type.id
+        )
         validator = validator_class(
             schema_for_validation,
             registry=self._create_reference_registry(),
