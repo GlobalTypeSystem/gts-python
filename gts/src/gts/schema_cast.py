@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import copy
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from jsonschema import exceptions as js_exceptions
+from referencing import Registry
 
 from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
@@ -23,15 +24,15 @@ class GtsEntityCastResult:
     from_id: str = ""
     to_id: str = ""
     direction: str = "unknown"
-    added_properties: list[str] = None  # type: ignore
-    removed_properties: list[str] = None  # type: ignore
-    changed_properties: list[dict[str, str]] = None  # type: ignore
+    added_properties: list[str] = field(default_factory=list)
+    removed_properties: list[str] = field(default_factory=list)
+    changed_properties: list[dict[str, str]] = field(default_factory=list)
     is_fully_compatible: bool | None = False
     is_backward_compatible: bool | None = False
     is_forward_compatible: bool | None = False
-    incompatibility_reasons: list[str] = None  # type: ignore
-    backward_errors: list[str] = None  # type: ignore
-    forward_errors: list[str] = None  # type: ignore
+    incompatibility_reasons: list[str] = field(default_factory=list)
+    backward_errors: list[str] = field(default_factory=list)
+    forward_errors: list[str] = field(default_factory=list)
     casted_entity: dict[str, Any] | None = None
     error: str = ""
     # Optional explicit verdict strings ("compatible"/"incompatible"/"unknown").
@@ -39,21 +40,9 @@ class GtsEntityCastResult:
     backward_verdict: str | None = None
     forward_verdict: str | None = None
     full_verdict: str | None = None
-
-    def __post_init__(self):
-        # Initialize list fields if None
-        if self.added_properties is None:
-            self.added_properties = []
-        if self.removed_properties is None:
-            self.removed_properties = []
-        if self.changed_properties is None:
-            self.changed_properties = []
-        if self.incompatibility_reasons is None:
-            self.incompatibility_reasons = []
-        if self.backward_errors is None:
-            self.backward_errors = []
-        if self.forward_errors is None:
-            self.forward_errors = []
+    # Content model (open/closed/partially_open) of every object level of the
+    # candidate ("new") schema, per spec sec 4.4. Empty for the cast op.
+    candidate_object_levels: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         def _compat_str(val: bool | None) -> str:
@@ -84,6 +73,7 @@ class GtsEntityCastResult:
             "backward_errors": self.backward_errors,
             "forward_errors": self.forward_errors,
             "casted_entity": self.casted_entity,
+            "candidate_object_levels": self.candidate_object_levels,
         }
         if self.error:
             result["error"] = self.error
@@ -255,7 +245,7 @@ class GtsEntityCastResult:
             incompatibility_reasons = []
         added: list[str] = []
         removed: list[str] = []
-        incompatibility_reasons: list[str] = []
+        incompatibility_reasons = []
 
         if not isinstance(instance, dict):
             raise SchemaCastError("Instance must be an object for casting")
@@ -399,7 +389,9 @@ class GtsEntityCastResult:
         modified_schema = GtsEntityCastResult._remove_gts_const_constraints(schema)
 
         validator_class = validator_for(modified_schema)
-        if resolver is not None:
+        if isinstance(resolver, Registry):
+            validator = validator_class(modified_schema, registry=resolver)
+        elif resolver is not None:
             validator = validator_class(modified_schema, resolver=resolver)
         else:
             validator = validator_class(modified_schema)
@@ -413,7 +405,7 @@ class GtsEntityCastResult:
         if not isinstance(schema, dict):
             return schema
 
-        result = {}
+        result: dict[str, Any] = {}
         for key, value in schema.items():
             if key == "const" and isinstance(value, str) and GtsID.is_valid(value):
                 # Replace const with a type constraint instead

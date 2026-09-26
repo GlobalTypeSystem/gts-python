@@ -81,10 +81,12 @@ class GtsIdSegment:
         self.package: str = ""
         self.namespace: str = ""
         self.type: str = ""
-        self.ver_major: int = 0
+        self.ver_major: int | None = 0
         self.ver_minor: int | None = None
         self.is_type: bool = False
         self.is_wildcard: bool = False
+        # Marks the synthetic UUID tail of a combined anonymous instance id.
+        self._is_uuid_tail: bool = False
 
         self._parse_segment_id(num, offset, segment)
 
@@ -206,8 +208,12 @@ class GtsID:
     def __init__(self, id: str):
         raw = id.strip()
 
-        # Normalize to the canonical bare form at this boundary.
-        raw = _strip_scheme(raw)
+        # A GtsID is always the bare canonical form ("gts.…"). The "gts://" URI
+        # form is a JSON Schema serialization detail ($id/$ref) and is stripped
+        # by those URI-specific callers (e.g. entity extraction via
+        # ``strip_scheme``) before reaching here, mirroring the gts-rust/gts-go
+        # reference implementations. Accepting it here would let URI-form values
+        # pass validate-id/parse-id and disagree with the canonical ``id``.
 
         # Validate it's lower case
         if raw != raw.lower():
@@ -335,7 +341,9 @@ class GtsID:
 
     @classmethod
     def is_valid(cls, s: str) -> bool:
-        if not _strip_scheme(s).startswith(GTS_PREFIX):
+        # Only the bare canonical form is a valid id; the "gts://" URI form is
+        # stripped by URI-specific callers before validation (see GtsID.__init__).
+        if not s.startswith(GTS_PREFIX):
             return False
         try:
             _ = cls(s)

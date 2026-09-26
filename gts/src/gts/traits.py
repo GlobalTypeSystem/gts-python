@@ -41,11 +41,13 @@ class EffectiveTraits:
         values: Any,
         resolved_trait_schemas: list[Any],
         merged_traits: dict[str, Any],
+        dialect: str | None,
     ) -> None:
         self.schema = schema
         self.values = values
         self.resolved_trait_schemas = resolved_trait_schemas
         self.merged_traits = merged_traits
+        self.dialect = dialect
 
     def _has_schema(self) -> bool:
         return len(self.resolved_trait_schemas) > 0
@@ -61,7 +63,9 @@ class EffectiveTraits:
         selected_type_id: str | None = None,
     ) -> list[str]:
         """Return a list of error strings (empty means valid)."""
-        errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
+        errors = _validate_trait_schema_integrity(
+            self.resolved_trait_schemas, self.dialect
+        )
         if errors:
             return errors
         errors = _validate_trait_schema_compatibility(self.resolved_trait_schemas)
@@ -191,6 +195,7 @@ def build_effective_traits(
         values=values,
         resolved_trait_schemas=list(resolved_trait_schemas),
         merged_traits=copy.deepcopy(merged_traits),
+        dialect=dialect,
     )
 
 
@@ -298,14 +303,19 @@ def _without_required(schema: Any) -> Any:
     return map_schema_nodes(copy.deepcopy(schema), strip)
 
 
-def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
+def _validate_trait_schema_integrity(
+    resolved_trait_schemas: list[Any], dialect: str | None
+) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
             continue
         if isinstance(ts, dict):
+            schema = copy.deepcopy(ts)
+            if dialect:
+                schema["$schema"] = dialect
             try:
-                cls = validator_for(ts)
-                cls.check_schema(ts)
+                cls = validator_for(schema)
+                cls.check_schema(schema)
             except Exception as e:  # noqa: BLE001 - surfaced as validation error message
                 return [f"{X_GTS_TRAITS_SCHEMA}[{i}] is not a valid JSON Schema: {e}"]
         else:

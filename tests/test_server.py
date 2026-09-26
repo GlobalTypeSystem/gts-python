@@ -6,10 +6,8 @@ import asyncio
 
 import pytest
 from fastapi.responses import JSONResponse
-
-from gts.ops import GtsOps
 from gts._server import GtsHttpServer, ValidateEntityRequest, _RequestLoggingMiddleware
-
+from gts.ops import GtsOps
 
 SCHEMA = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -105,25 +103,36 @@ class TestHandlers:
         resp = run(server.add_entities(body=[SCHEMA, INSTANCE]))
         assert resp.status_code == 200
 
-    def test_add_schema(self, server):
-        from gts._server import SchemaRegister
+    def test_add_schemas(self, server):
+        import json
 
-        body = SchemaRegister(type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"})
-        resp = run(server.add_schema(body))
+        body = [
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "$id": "gts://gts.x.test._.bar.v1~",
+                "type": "object",
+            },
+        ]
+        resp = run(server.add_schemas(body))
         assert resp.status_code == 200
+        payload = json.loads(resp.body)
+        assert payload["ok"] is True
+        assert payload["results"][0]["type_id"] == "gts.x.test._.bar.v1~"
 
-    def test_add_schema_changed_content_conflict(self, server):
-        from gts._server import SchemaRegister
+    def test_add_schemas_changed_content_conflict(self, server):
+        import json
 
-        initial = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~", type_schema={"type": "object"}
-        )
-        changed = SchemaRegister(
-            type_id="gts.x.test._.bar.v1~", type_schema={"type": "string"}
-        )
+        dialect = "http://json-schema.org/draft-07/schema#"
+        schema_id = "gts://gts.x.test._.bar.v1~"
+        initial = [{"$schema": dialect, "$id": schema_id, "type": "object"}]
+        changed = [{"$schema": dialect, "$id": schema_id, "type": "string"}]
 
-        assert run(server.add_schema(initial)).status_code == 200
-        assert run(server.add_schema(changed)).status_code == 409
+        assert run(server.add_schemas(initial)).status_code == 200
+        resp = run(server.add_schemas(changed))
+        assert resp.status_code == 200
+        payload = json.loads(resp.body)
+        assert payload["ok"] is False
+        assert payload["results"][0]["ok"] is False
 
     def test_validate_id(self, server):
         result = run(server.validate_id(id="gts.x.test._.foo.v1~"))
@@ -226,6 +235,27 @@ class TestHandlers:
 
 
 class TestRequestLoggingMiddlewareVerboseOff:
+    def test_verbose_logging_does_not_read_or_log_bodies(self, server, caplog):
+        class URL:
+            path = "/entities"
+
+        class Request:
+            method = "POST"
+            url = URL()
+
+            async def body(self):
+                raise AssertionError("request body must not be read by logging middleware")
+
+        middleware = _RequestLoggingMiddleware(server.app, verbose=2)
+
+        async def call_next(request):
+            return JSONResponse({"secret": "must-not-be-logged"})
+
+        with caplog.at_level("DEBUG"):
+            result = run(middleware.dispatch(request=Request(), call_next=call_next))
+        assert result.headers["connection"] == "close"
+        assert "must-not-be-logged" not in caplog.text
+
     def test_dispatch_skips_when_not_verbose(self, server):
         middleware = _RequestLoggingMiddleware(server.app, verbose=0)
 

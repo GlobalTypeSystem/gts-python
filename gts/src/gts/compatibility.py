@@ -244,3 +244,174 @@ def full_verdict(backward: str, forward: str) -> str:
 def check_accepted_set_inclusion(subset: Any, superset: Any) -> bool | None:
     """Shared inclusion primitive used by OP#12 derivation admission."""
     return _is_subschema(subset, superset)
+
+
+# --- diagnostics (spec sec 4.4) -------------------------------------------
+#
+# The inclusion verdict tells you *whether* two definitions are compatible; a
+# caller admitting a new version also wants to know *why* a direction failed and
+# whether a level can still gain optional properties later. The Rust reference
+# surfaces both (``SchemaComparison`` carries diagnostics plus the content model
+# of every object level). We keep ``jsonsubschema`` as the inclusion primitive
+# and add the same reporting on top of it.
+
+OPEN = "open"
+CLOSED = "closed"
+PARTIAL = "partially_open"
+
+_APPLICATOR_OBJECT_KEYWORDS = (
+    "properties",
+    "patternProperties",
+    "$defs",
+    "definitions",
+)
+
+
+def _level_content_model(node: dict[str, Any]) -> str:
+    """Classify how one object level treats undeclared properties.
+
+    - ``open``: accepts an undeclared property with any value;
+    - ``closed``: rejects every undeclared property;
+    - ``partially_open``: accepts some undeclared names or constrains their
+      values (schema-valued ``additionalProperties``, ``patternProperties`` or
+      ``propertyNames``).
+    """
+    has_pattern = bool(node.get("patternProperties"))
+    has_property_names = "propertyNames" in node
+    additional = node.get("additionalProperties")
+    if additional is None:
+        additional_kind = "open"
+    else:
+        boolean = boolean_schema_value(additional)
+        if boolean is True:
+            additional_kind = "open"
+        elif boolean is False:
+            additional_kind = "closed"
+        else:
+            additional_kind = "schema"
+
+    if additional_kind == "closed" and not has_pattern and not has_property_names:
+        return CLOSED
+    if additional_kind == "open" and not has_pattern and not has_property_names:
+        return OPEN
+    return PARTIAL
+
+
+def _is_object_level(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if node.get("type") == "object" or "properties" in node:
+        return True
+    return any(
+        key in node
+        for key in ("additionalProperties", "patternProperties", "propertyNames")
+    )
+
+
+def classify_object_levels(schema: Any) -> list[dict[str, str]]:
+    """Content model of every object level of a (resolved) schema.
+
+    Returns one entry per object level, e.g.
+    ``[{"path": "$", "content_model": "closed"}, ...]``. Callers use it to
+    report, per level, whether a later definition can add an optional property
+    there (only a ``closed`` level can, per spec sec 4.4).
+    """
+    levels: list[dict[str, str]] = []
+    seen: set[int] = set()
+
+    def walk(node: Any, path: str, depth: int) -> None:
+        if depth > 64 or not isinstance(node, dict):
+            return
+        marker = id(node)
+        if marker in seen:
+            return
+        seen.add(marker)
+
+        if _is_object_level(node):
+            levels.append({"path": path, "content_model": _level_content_model(node)})
+
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for name, child in properties.items():
+                walk(child, f"{path}.{name}", depth + 1)
+
+        # Undeclared-property and pattern-property values are object levels of
+        # the instance too, so classify their schemas (a bare boolean/absent
+        # additionalProperties carries no nested level).
+        pattern_properties = node.get("patternProperties")
+        if isinstance(pattern_properties, dict):
+            for pattern, child in pattern_properties.items():
+                walk(child, f"{path}.patternProperties[{pattern}]", depth + 1)
+        additional = node.get("additionalProperties")
+        if isinstance(additional, dict):
+            walk(additional, f"{path}.additionalProperties", depth + 1)
+
+        # Array element schemas: `items` as a single schema, and the tuple forms
+        # (`prefixItems`, or `items`/`additionalItems` as a list).
+        items = node.get("items")
+        if isinstance(items, dict):
+            walk(items, f"{path}[]", depth + 1)
+        elif isinstance(items, list):
+            for index, child in enumerate(items):
+                walk(child, f"{path}[{index}]", depth + 1)
+        prefix_items = node.get("prefixItems")
+        if isinstance(prefix_items, list):
+            for index, child in enumerate(prefix_items):
+                walk(child, f"{path}[{index}]", depth + 1)
+        additional_items = node.get("additionalItems")
+        if isinstance(additional_items, dict):
+            walk(additional_items, f"{path}[].additionalItems", depth + 1)
+
+        for combinator in ("allOf", "anyOf", "oneOf"):
+            branches = node.get(combinator)
+            if isinstance(branches, list):
+                for branch in branches:
+                    walk(branch, path, depth + 1)
+
+    walk(schema, "$", 0)
+    return levels
+
+
+def explain_verdict(
+    verdict: str, *, backward: bool, differing_dialects: bool = False
+) -> list[str]:
+    """Human-readable reasons for a non-``compatible`` directional verdict.
+
+    Pure function of an already-computed ``verdict`` (``compatible`` /
+    ``incompatible`` / ``unknown``); it does not re-run the inclusion check, so
+    the caller pays for the accepted-instance-set comparison exactly once.
+    ``backward`` selects the direction (backward is ``Valid(old) subset-of
+    Valid(new)``, forward the reverse) for message wording; ``differing_dialects``
+    distinguishes an ``unknown`` caused by incomparable dialects from one the
+    checker could not decide. Returns ``[]`` for a compatible verdict.
+    """
+    if verdict == COMPATIBLE:
+        return []
+    if verdict == UNKNOWN:
+        if differing_dialects:
+            return [
+                (
+                    "compatibility is unknown: the two definitions declare "
+                    "different JSON Schema dialects, so their accepted-instance "
+                    "sets are not comparable"
+                )
+            ]
+        return [
+            (
+                "compatibility is unknown: the accepted-instance-set inclusion "
+                "could not be proved or disproved for this direction"
+            )
+        ]
+    if backward:
+        return [
+            (
+                "backward incompatible: Valid(old) is not a subset of Valid(new); "
+                "the new definition rejects instances the old definition accepts"
+            )
+        ]
+    return [
+        (
+            "forward incompatible: Valid(new) is not a subset of Valid(old); the "
+            "old definition rejects instances the new definition accepts"
+        )
+    ]

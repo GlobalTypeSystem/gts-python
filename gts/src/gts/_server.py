@@ -45,32 +45,13 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
         self.verbose = verbose
 
     async def dispatch(self, request, call_next):
-        if not self.verbose:
-            response = await call_next(request)
-            response.headers["connection"] = "close"
-            return response
-
         start = time.time()
-
-        # Cache request body for DEBUG logging (verbose >= 2)
-        cached_body = None
-        if self.verbose >= 2:
-            # Read and cache the request body
-            cached_body = await request.body()
-
-            # Create a new request with the cached body
-            from starlette.requests import Request
-
-            async def receive():
-                return {"type": "http.request", "body": cached_body}
-
-            request = Request(request.scope, receive)
-
         response = await call_next(request)
         response.headers["connection"] = "close"
-        dur = (time.time() - start) * 1000.0
+        if not self.verbose:
+            return response
 
-        # Determine status color
+        dur = (time.time() - start) * 1000.0
         if 200 <= response.status_code < 300:
             status_color = Colors.GREEN
         elif 300 <= response.status_code < 400:
@@ -78,10 +59,6 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
         else:
             status_color = Colors.RED
 
-        # Log response at INFO level (verbose >= 1).
-        # Neutralize CR/LF in the request-derived path to prevent log forging
-        # (CWE-117); ASGI percent-decodes scope["path"], so it may contain
-        # newlines that would otherwise inject forged log records.
         safe_path = request.url.path.replace("\r", "\\r").replace("\n", "\\n")
         logger.info(
             f"{Colors.CYAN}{request.method}{Colors.RESET} "
@@ -89,66 +66,7 @@ class _RequestLoggingMiddleware(BaseHTTPMiddleware):
             f"{status_color}{response.status_code}{Colors.RESET} "
             f"in {Colors.MAGENTA}{dur:.1f}ms{Colors.RESET}"
         )
-
-        # Log request body at DEBUG level (verbose >= 2)
-        if self.verbose >= 2 and cached_body:
-            try:
-                import json
-
-                body_json = json.loads(cached_body.decode("utf-8"))
-                body_str = json.dumps(body_json, indent=2)
-                logger.debug(
-                    f"{Colors.DIM}Request body:{Colors.RESET}\n"
-                    f"{Colors.GRAY}{body_str}{Colors.RESET}"
-                )
-            except Exception:  # noqa: BLE001 - best-effort debug logging
-                body_str = cached_body.decode("utf-8", errors="replace")
-                logger.debug(
-                    f"{Colors.DIM}Request body (raw):{Colors.RESET}\n"
-                    f"{Colors.GRAY}{body_str}{Colors.RESET}"
-                )
-
-        # Log response body at DEBUG level (verbose >= 2)
-        if self.verbose >= 2:
-            # Read response body
-            from starlette.responses import Response, StreamingResponse
-
-            if isinstance(response, (Response, StreamingResponse)):
-                response_body = b""
-                async for chunk in response.body_iterator:
-                    response_body += chunk
-
-                if response_body:
-                    try:
-                        import json
-
-                        body_json = json.loads(response_body.decode("utf-8"))
-                        body_str = json.dumps(body_json, indent=2)
-                        logger.debug(
-                            f"{Colors.DIM}Response body:{Colors.RESET}\n"
-                            f"{Colors.GRAY}{body_str}{Colors.RESET}"
-                        )
-                    except Exception:  # noqa: BLE001 - best-effort debug logging
-                        body_str = response_body.decode("utf-8", errors="replace")
-                        logger.debug(
-                            f"{Colors.DIM}Response body (raw):{Colors.RESET}\n"
-                            f"{Colors.GRAY}{body_str}{Colors.RESET}"
-                        )
-
-                # Recreate response with the body
-                return Response(
-                    content=response_body,
-                    status_code=response.status_code,
-                    headers=dict(response.headers),
-                    media_type=response.media_type,
-                )
-
         return response
-
-
-class SchemaRegister(BaseModel):
-    type_id: str
-    type_schema: dict[str, Any]
 
 
 class CastRequest(BaseModel):
@@ -193,9 +111,9 @@ class GtsHttpServer:
         self.host = host
         self.port = port
         self.base_url = f"http://{self.host}:{self.port}"
-        self.app = FastAPI(title="GTS Server", version="0.14.0")
+        self.app = FastAPI(title="GTS Server", version="0.15.0")
         self.app.add_middleware(
-            _RequestLoggingMiddleware,
+            _RequestLoggingMiddleware,  # type: ignore[arg-type]
             verbose=self.ops.verbose,
         )
         self._register_routes()
@@ -235,9 +153,9 @@ class GtsHttpServer:
         )
         app.add_api_route(
             "/type-schemas",
-            self.add_schema,
+            self.add_schemas,
             methods=["POST"],
-            summary="Register a GTS Type Schema under an explicit type_id",
+            summary="Register a batch of GTS Type Schemas",
             response_class=JSONResponse,
         )
 
@@ -367,11 +285,11 @@ class GtsHttpServer:
     ) -> JSONResponse:
         return JSONResponse(self.ops.add_entities(body).to_dict())
 
-    async def add_schema(self, body: SchemaRegister) -> JSONResponse:
-        result = self.ops.add_schema(body.type_id, body.type_schema)
-        return JSONResponse(
-            result.to_dict(), status_code=409 if result.conflict else 200
-        )
+    async def add_schemas(
+        self,
+        body: list[dict[str, Any]] = Body(...),
+    ) -> JSONResponse:
+        return JSONResponse(self.ops.add_schemas(body).to_dict())
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.validate_id(id).to_dict()
