@@ -35,7 +35,7 @@ from .schema_cast import GtsEntityCastResult
 # Re-exported for backward compatibility; the limit now lives in schema_resolver.
 from .schema_resolver import MAX_SCHEMA_REF_EXPANSIONS  # noqa: F401
 from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
-from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref
+from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref, extended_validator_for
 
 logger = logging.getLogger(__name__)
 
@@ -1036,11 +1036,15 @@ class GtsStore:
                 f"type '{schema_type.id}' is abstract and cannot have direct instances"
             )
 
+        # Keep x-gts-ref in the schema and evaluate it with the extended
+        # validator so the engine resolves oneOf/anyOf/allOf correctly (branches
+        # that differ only by x-gts-ref stay distinct). Existence and /$id are
+        # still enforced by the XGtsRefValidator walker below.
         schema_for_validation = {
-            **_without_x_gts_ref(schema),
+            **schema,
             "$schema": self._schema_dialect_uri(schema),
         }
-        validator_class = validator_for(schema_for_validation)
+        validator_class = extended_validator_for(schema_for_validation)
         validator = validator_class(
             schema_for_validation,
             registry=self._create_reference_registry(),

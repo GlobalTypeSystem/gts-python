@@ -208,8 +208,12 @@ class GtsID:
     def __init__(self, id: str):
         raw = id.strip()
 
-        # Normalize to the canonical bare form at this boundary.
-        raw = _strip_scheme(raw)
+        # A GtsID is always the bare canonical form ("gts.…"). The "gts://" URI
+        # form is a JSON Schema serialization detail ($id/$ref) and is stripped
+        # by those URI-specific callers (e.g. entity extraction via
+        # ``strip_scheme``) before reaching here, mirroring the gts-rust/gts-go
+        # reference implementations. Accepting it here would let URI-form values
+        # pass validate-id/parse-id and disagree with the canonical ``id``.
 
         # Validate it's lower case
         if raw != raw.lower():
@@ -337,7 +341,9 @@ class GtsID:
 
     @classmethod
     def is_valid(cls, s: str) -> bool:
-        if not _strip_scheme(s).startswith(GTS_PREFIX):
+        # Only the bare canonical form is a valid id; the "gts://" URI form is
+        # stripped by URI-specific callers before validation (see GtsID.__init__).
+        if not s.startswith(GTS_PREFIX):
             return False
         try:
             _ = cls(s)
