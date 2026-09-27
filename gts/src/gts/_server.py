@@ -288,8 +288,17 @@ class GtsHttpServer:
     async def add_schemas(
         self,
         body: list[dict[str, Any]] = Body(...),
+        validate: bool = Query(False),
+        validation: bool = Query(False),
+        gts_ref_validation: GtsRefValidationMode = GTS_REF_VALIDATION_QUERY,
     ) -> JSONResponse:
-        return JSONResponse(self.ops.add_schemas(body).to_dict())
+        return JSONResponse(
+            self.ops.add_schemas(
+                body,
+                validate=validate is True or validation is True,
+                gts_ref_validation=gts_ref_validation,
+            ).to_dict()
+        )
 
     async def validate_id(self, id: str = Query(..., alias="gts_id")) -> dict[str, Any]:
         return self.ops.validate_id(id).to_dict()

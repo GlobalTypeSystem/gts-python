@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path as SysPath
 from typing import Any
 
-from ._naming import looks_like_gts, strip_scheme
+from ._naming import GTS_PREFIX, GTS_URI_PREFIX, looks_like_gts, strip_scheme
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
 from .gts import GtsID, GtsWildcard
@@ -495,21 +495,55 @@ class GtsOps:
         return GtsAddEntitiesResult(ok=ok, results=results)
 
     def add_schemas(
-        self, schemas: builtins.list[dict[str, Any]]
+        self,
+        schemas: builtins.list[dict[str, Any]],
+        validate: bool = False,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
     ) -> GtsAddSchemasResult:
         """Register a batch of GTS Type Schemas.
 
         Each entry's GTS Type Identifier is derived from its embedded ``$id``;
         the aggregate ``ok`` is ``True`` only when every entry registered.
+        ``validate`` / ``gts_ref_validation`` apply to every entry exactly as
+        they do on ``POST /entities``.
         """
-        results = [self.add_schema(schema) for schema in schemas]
+        results = [
+            self.add_schema(schema, validate=validate, gts_ref_validation=gts_ref_validation)
+            for schema in schemas
+        ]
         ok = all(r.ok for r in results)
         return GtsAddSchemasResult(ok=ok, results=results)
 
-    def add_schema(self, schema: dict[str, Any]) -> GtsAddSchemaResult:
-        """Register a single GTS Type Schema, deriving its type_id from ``$id``."""
-        embedded_id = schema.get("$id") if isinstance(schema, dict) else None
-        if not isinstance(embedded_id, str) or not embedded_id:
+    def add_schema(
+        self,
+        schema: dict[str, Any],
+        validate: bool = False,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
+    ) -> GtsAddSchemaResult:
+        """Register a single GTS Type Schema, deriving its type_id from ``$id``.
+
+        The embedded ``$schema`` / ``$id`` presence checks are batch-specific;
+        the actual registration and (when requested) validation reuse the
+        single-entity :meth:`add_entity` path, so each entry honors ``validate``
+        / ``gts_ref_validation`` exactly like a ``POST /entities`` call.
+        """
+        if not isinstance(schema, dict):
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema entry must be a JSON object",
+            )
+        dialect = schema.get("$schema")
+        if not isinstance(dialect, str) or not dialect:
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema must contain a top-level $schema field",
+            )
+        embedded_id = schema.get("$id")
+        if not isinstance(embedded_id, str) or not embedded_id.startswith(
+            GTS_URI_PREFIX + GTS_PREFIX
+        ):
             return GtsAddSchemaResult(
                 ok=False,
                 type_id=None,
@@ -517,23 +551,25 @@ class GtsOps:
             )
         type_id = strip_scheme(embedded_id)
         try:
-            with self.store.transaction():
-                previous = self.store.get(type_id)
-                if (
-                    previous
-                    and not self.allow_entity_updates
-                    and previous.content != schema
-                ):
-                    return GtsAddSchemaResult(
-                        ok=False,
-                        type_id=type_id,
-                        error=f"Entity '{type_id}' is already registered with different content",
-                        conflict=True,
-                    )
-                self.store.register_schema(type_id, schema)
-                return GtsAddSchemaResult(ok=True, type_id=type_id)
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            return GtsAddSchemaResult(ok=False, type_id=type_id, error=str(e))
+            GtsID.parse_type(type_id)
+        except ValueError:
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=type_id,
+                error=f"Invalid GTS Type Schema $id: {embedded_id}",
+            )
+
+        result = self.add_entity(
+            schema, validate=validate, gts_ref_validation=gts_ref_validation
+        )
+        if result.ok:
+            return GtsAddSchemaResult(ok=True, type_id=type_id)
+        return GtsAddSchemaResult(
+            ok=False,
+            type_id=type_id,
+            error=result.error,
+            conflict=result.conflict,
+        )
 
     def validate_id(self, gts_id: str) -> GtsIdValidationResult:
         # Check if it's a wildcard pattern (contains *)
