@@ -146,7 +146,16 @@ class GtsStore:
         # reads (`get_committed`, `values`, `keys`, `items`, `query`) until
         # `commit`. This is how a validate=true registration avoids ever
         # exposing an entity that has not yet passed validation.
-        self._staged: dict[str, GtsEntity] = {}
+        #
+        # Keyed by a unique staging TOKEN (not the registry key) so two entries
+        # that resolve to the same id - a duplicated batch entry or two
+        # concurrent batches - never clobber each other, and commit/discard only
+        # affect the entry they name. ``_staged_by_key`` is the by-key overlay
+        # ``get`` and the reference registry consult; it holds the most recently
+        # staged entity per key and is recomputed on commit/discard.
+        self._staged: dict[str, tuple[str, GtsEntity]] = {}
+        self._staged_by_key: dict[str, GtsEntity] = {}
+        self._stage_seq = 0
         self._reader = reader
         self._lock = threading.RLock()
         self._reference_registry: Registry | None = None
@@ -248,7 +257,7 @@ class GtsStore:
         """
         entity_id = strip_scheme(entity_id)
         with self._lock:
-            staged = self._staged.get(entity_id)
+            staged = self._staged_by_key.get(entity_id)
             if staged is not None:
                 return copy.deepcopy(staged)
         return self.get_committed(entity_id)
@@ -291,31 +300,63 @@ class GtsStore:
 
     def stage(self, entity: GtsEntity) -> str:
         """Place an entity into the staging overlay WITHOUT publishing it, and
-        return its registry key. A staged entity is visible to internal
-        validation but invisible to public reads until :meth:`commit`. Raises
-        ``EntityConflictError`` when a committed entity with different content
-        already holds the key and updates are not allowed. Callers MUST
-        eventually :meth:`commit` or :meth:`discard` the staged key."""
+        return a unique staging token. A staged entity is visible to internal
+        validation but invisible to public reads until :meth:`commit`. Callers
+        MUST eventually :meth:`commit` or :meth:`discard` the returned token."""
         stored = copy.deepcopy(entity)
         key = self._entity_key(stored)
         with self._lock:
-            self._staged[key] = stored
+            self._stage_seq += 1
+            token = f"stg-{self._stage_seq}"
+            self._staged[token] = (key, stored)
+            self._staged_by_key[key] = stored
             self._invalidate_reference_registry()
-        return key
+        return token
 
-    def commit(self, entity_id: str) -> None:
-        """Publish a previously staged entity, making it visible to public reads."""
+    def _remove_staged_locked(self, token: str, key: str) -> None:
+        """Drop the staged entry named by ``token`` and rebuild the by-key
+        overlay for ``key`` from any other tokens that still target it. The
+        caller must hold ``self._lock``."""
+        self._staged.pop(token, None)
+        self._staged_by_key.pop(key, None)
+        for other_key, other_entity in self._staged.values():
+            if other_key == key:
+                self._staged_by_key[key] = other_entity
+
+    def commit(self, token: str, allow_updates: bool = False) -> str:
+        """Publish the entity named by ``token``, making it visible to public
+        reads. The publish is atomic with a conflict check against the committed
+        store: returns ``"added"`` when it was inserted, ``"unchanged"`` when an
+        identical entity already held the key, and ``"conflict"`` when a
+        different entity already held it and ``allow_updates`` is false (nothing
+        is published in that case). An unknown token also yields ``"conflict"``."""
         with self._lock:
-            staged = self._staged.pop(entity_id, None)
-            if staged is not None:
-                self._by_id[entity_id] = staged
+            entry = self._staged.get(token)
+            if entry is None:
+                return "conflict"
+            key, staged = entry
+            self._remove_staged_locked(token, key)
+            existing = self._by_id.get(key)
+            if (
+                existing is not None
+                and not allow_updates
+                and existing.content != staged.content
+            ):
                 self._invalidate_reference_registry()
+                return "conflict"
+            outcome = "unchanged" if existing is not None else "added"
+            self._by_id[key] = staged
+            self._invalidate_reference_registry()
+            return outcome
 
-    def discard(self, entity_id: str) -> None:
-        """Drop a staged entity that failed validation. The committed state is
-        untouched, so a client never observes the discarded (invalid) entity."""
+    def discard(self, token: str) -> None:
+        """Drop the staged entity named by ``token`` that failed validation. The
+        committed state is untouched, so a client never observes the discarded
+        (invalid) entity."""
         with self._lock:
-            if self._staged.pop(entity_id, None) is not None:
+            entry = self._staged.get(token)
+            if entry is not None:
+                self._remove_staged_locked(token, entry[0])
                 self._invalidate_reference_registry()
 
     def get_schema_content(self, type_id: str) -> dict[str, Any]:
@@ -333,7 +374,7 @@ class GtsStore:
             # Committed entities plus the staging overlay (staged overrides a
             # committed entry of the same id), so a schema being validated as
             # part of a batch resolves `$ref`s to its not-yet-committed siblings.
-            merged = {**self._by_id, **self._staged}
+            merged = {**self._by_id, **self._staged_by_key}
             for entity_id, entity in merged.items():
                 if entity.is_schema and isinstance(entity.content, dict):
                     resource = Resource.from_contents(
