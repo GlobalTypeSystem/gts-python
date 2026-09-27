@@ -599,7 +599,9 @@ class GtsOps:
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         if not validate:
             results = [
-                self.add_schema(schema, validate=False, gts_ref_validation=gts_ref_validation)
+                self.add_schema(
+                    schema, validate=False, gts_ref_validation=gts_ref_validation
+                )
                 for schema in schemas
             ]
             return GtsAddSchemasResult(ok=all(r.ok for r in results), results=results)
