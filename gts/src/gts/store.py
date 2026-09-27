@@ -139,6 +139,14 @@ class GtsStore:
             reader: GtsReader instance to populate entities from
         """
         self._by_id: dict[str, GtsEntity] = {}
+        # Entities registered but not yet published. A staged entity is visible
+        # to internal validation/resolution (via `get`, the reference registry
+        # and x-gts-ref existence checks) so a batch can resolve intra-batch
+        # references regardless of entry order, but it is invisible to public
+        # reads (`get_committed`, `values`, `keys`, `items`, `query`) until
+        # `commit`. This is how a validate=true registration avoids ever
+        # exposing an entity that has not yet passed validation.
+        self._staged: dict[str, GtsEntity] = {}
         self._reader = reader
         self._lock = threading.RLock()
         self._reference_registry: Registry | None = None
@@ -228,13 +236,29 @@ class GtsStore:
 
     def get(self, entity_id: str) -> GtsEntity | None:
         """
-        Get a JsonEntity by its ID.
-        If not found in cache, try to fetch from reader.
-        Returns None if not found.
+        Get a JsonEntity by its ID for INTERNAL use (validation, $ref/existence
+        resolution). The staging overlay is consulted first so an entity being
+        validated as part of a batch can resolve its not-yet-committed siblings
+        regardless of order. Public/API reads MUST use :meth:`get_committed` so
+        uncommitted entities are never exposed.
 
         Lookups are normalized to the canonical bare form here, so callers may
         pass either a bare ``gts.`` id or a ``gts://`` URI without stripping the
         scheme themselves.
+        """
+        entity_id = strip_scheme(entity_id)
+        with self._lock:
+            staged = self._staged.get(entity_id)
+            if staged is not None:
+                return copy.deepcopy(staged)
+        return self.get_committed(entity_id)
+
+    def get_committed(self, entity_id: str) -> GtsEntity | None:
+        """
+        Committed-only lookup: the staging overlay is never consulted, so a
+        staged-but-not-yet-committed entity is invisible here. This is the read
+        path for public/API consumers. Falls back to the reader for ids not yet
+        cached. Returns None if not found.
         """
         entity_id = strip_scheme(entity_id)
         with self._lock:
@@ -253,6 +277,47 @@ class GtsStore:
 
             return None
 
+    @staticmethod
+    def _entity_key(entity: GtsEntity) -> str:
+        """The registry key for an entity: the raw id for instances that carry
+        one (anonymous/UUID instances), otherwise the canonical GTS id."""
+        if not entity.is_schema and entity.raw_id:
+            return entity.raw_id
+        if entity.gts_id and entity.gts_id.id:
+            return entity.gts_id.id
+        if entity.raw_id:
+            return entity.raw_id
+        raise ValueError("Entity must have a valid gts_id or raw_id")
+
+    def stage(self, entity: GtsEntity) -> str:
+        """Place an entity into the staging overlay WITHOUT publishing it, and
+        return its registry key. A staged entity is visible to internal
+        validation but invisible to public reads until :meth:`commit`. Raises
+        ``EntityConflictError`` when a committed entity with different content
+        already holds the key and updates are not allowed. Callers MUST
+        eventually :meth:`commit` or :meth:`discard` the staged key."""
+        stored = copy.deepcopy(entity)
+        key = self._entity_key(stored)
+        with self._lock:
+            self._staged[key] = stored
+            self._invalidate_reference_registry()
+        return key
+
+    def commit(self, entity_id: str) -> None:
+        """Publish a previously staged entity, making it visible to public reads."""
+        with self._lock:
+            staged = self._staged.pop(entity_id, None)
+            if staged is not None:
+                self._by_id[entity_id] = staged
+                self._invalidate_reference_registry()
+
+    def discard(self, entity_id: str) -> None:
+        """Drop a staged entity that failed validation. The committed state is
+        untouched, so a client never observes the discarded (invalid) entity."""
+        with self._lock:
+            if self._staged.pop(entity_id, None) is not None:
+                self._invalidate_reference_registry()
+
     def get_schema_content(self, type_id: str) -> dict[str, Any]:
         """Get schema content as dict (legacy method for backward compatibility)."""
         entity = self.get(type_id)
@@ -265,7 +330,11 @@ class GtsStore:
             if self._reference_registry is not None:
                 return self._reference_registry
             registry = Registry()
-            for entity_id, entity in self._by_id.items():
+            # Committed entities plus the staging overlay (staged overrides a
+            # committed entry of the same id), so a schema being validated as
+            # part of a batch resolves `$ref`s to its not-yet-committed siblings.
+            merged = {**self._by_id, **self._staged}
+            for entity_id, entity in merged.items():
                 if entity.is_schema and isinstance(entity.content, dict):
                     resource = Resource.from_contents(
                         _without_x_gts_ref(entity.content),
