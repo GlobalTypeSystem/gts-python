@@ -186,7 +186,11 @@ class TestAddSchema:
         assert result.conflict is True
 
     def test_add_schema_missing_id_failure(self, ops):
-        result = ops.add_schema({"type": "object"})
+        # $schema is present so the failure is specifically the absent $id
+        # (a Type Schema entry is checked for $schema before $id).
+        result = ops.add_schema(
+            {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object"}
+        )
         assert result.ok is False
         assert "$id" in result.error
 
