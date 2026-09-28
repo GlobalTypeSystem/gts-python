@@ -141,7 +141,37 @@ def _validate_pattern(
         yield ValidationError(f"invalid regular expression: {error}")
 
 
+def _validate_pattern_properties(
+    validator: Any, pattern_properties: Any, instance: Any, schema: Any
+) -> Iterator[ValidationError]:
+    # Mirrors jsonschema's default ``patternProperties`` applicator, but matches
+    # property names with the ``regex`` module under ``PATTERN_TIMEOUT_SECONDS``
+    # so an untrusted schema pattern cannot cause catastrophic backtracking
+    # (ReDoS, CWE-1333) against an adversarially long property name. The default
+    # implementation uses ``re.search`` with no timeout.
+    if not validator.is_type(instance, "object"):
+        return
+    for pattern, subschema in pattern_properties.items():
+        for name, value in instance.items():
+            try:
+                matched = regex.search(pattern, name, timeout=PATTERN_TIMEOUT_SECONDS)
+            except TimeoutError:
+                yield ValidationError("regular expression match timed out")
+                continue
+            except regex.error as error:
+                yield ValidationError(f"invalid regular expression: {error}")
+                continue
+            if matched is not None:
+                yield from validator.descend(
+                    value, subschema, path=name, schema_path=pattern
+                )
+
+
 def validator_for(schema: Any) -> Any:
     return validators.extend(
-        jsonschema_validator_for(schema), {"pattern": _validate_pattern}
+        jsonschema_validator_for(schema),
+        {
+            "pattern": _validate_pattern,
+            "patternProperties": _validate_pattern_properties,
+        },
     )

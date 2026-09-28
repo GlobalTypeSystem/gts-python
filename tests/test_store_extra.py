@@ -65,6 +65,18 @@ class TestBoundedPatternValidation:
         assert errors[0].message == "regular expression match timed out"
         assert PATTERN_TIMEOUT_SECONDS == 1.0
 
+    def test_catastrophic_pattern_properties_key_times_out(self):
+        # patternProperties matches property NAMES; an adversarially long key
+        # against a catastrophic pattern must be bounded by the same timeout as
+        # the `pattern` keyword rather than backtracking indefinitely.
+        schema = {"patternProperties": {"(a+)+$": {"type": "string"}}}
+        validator = validator_for(schema)(schema)
+        instance = {"a" * 30_000 + "!": "value"}
+        errors = list(validator.iter_errors(instance))
+        assert any(
+            error.message == "regular expression match timed out" for error in errors
+        )
+
 
 class TestRegisterEdgeCases:
     def test_register_raises_without_id(self):
