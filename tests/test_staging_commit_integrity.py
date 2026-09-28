@@ -10,6 +10,7 @@ entity is never publicly visible" (see ``test_staging_concurrency.py``):
   same batch (iterative discard-then-revalidate).
 """
 
+from gts.entities import GtsEntity
 from gts.ops import GtsOps, GtsRefValidationMode
 
 _D7 = "http://json-schema.org/draft-07/schema#"
@@ -100,13 +101,64 @@ def test_batch_does_not_commit_dependent_of_discarded_sibling():
 
 
 def test_batch_with_conflicting_duplicate_id_reports_conflict():
-    """A batch that carries the same $id twice with different content must not
-    silently keep only the last entry: exactly one commits and the conflicting
-    duplicate is reported as not-ok."""
+    """A batch that carries the same $id twice with different content is
+    internally inconsistent, so the atomic publish must keep NEITHER entry (no
+    silent last-wins): the batch is rejected as a whole and nothing is committed."""
     ops = GtsOps(path=None)
     tid = "gts.x.pydup._.t.v1~"
     res = ops.add_schemas([_schema(tid, "a"), _schema(tid, "b")], validate=True)
     assert res.ok is False
-    oks = [r.ok for r in res.results]
-    assert oks.count(True) == 1
-    assert oks.count(False) == 1
+    assert all(not r.ok for r in res.results)
+    # All-or-nothing: nothing from the inconsistent batch is published.
+    assert ops.store.get_committed(tid) is None
+
+
+def test_snapshot_overlay_is_scoped_to_its_own_staging_session():
+    """Regression for the cross-request staging leak: a schema staged under one
+    session must be invisible to reads made under a different session (or none),
+    so one batch never resolves a $ref/parent against another batch's
+    not-yet-validated entry."""
+    ops = GtsOps(path=None)
+    tid = "gts.x.pysess._.a.v1~"
+    _, entity, _ = ops._prepare_type_schema(_schema(tid, "a"))
+
+    with ops.store.staging_session() as session_a:
+        ops.store.stage(entity)
+        # Visible to its own session.
+        assert ops.store.get(tid) is not None
+        # Invisible to a different session and to committed-only reads.
+        with ops.store.staging_session():
+            assert ops.store.get(tid) is None
+        assert ops.store.get_committed(tid) is None
+    # Outside any session (committed-only), still invisible.
+    assert ops.store.get(tid) is None
+    assert session_a  # session id was returned
+
+
+def test_commit_batch_publishes_nothing_when_a_target_conflicts_with_committed():
+    """Regression for the non-atomic commit loop: if a survivor's target was
+    committed with different content by a concurrent writer, the whole batch
+    publishes nothing rather than committing the dependent against changed
+    content."""
+    ops = GtsOps(path=None)
+    parent = "gts.x.pyatomic._.parent.v1~"
+    child = "gts.x.pyatomic._.child.v1~"
+
+    # A concurrent writer already committed the parent id with different content.
+    committed = ops.add_schema(_schema(parent, "committed"))
+    assert committed.ok
+
+    # Build entities directly to simulate a batch whose parent target was won by
+    # a concurrent writer AFTER staging (the ops pre-check would otherwise reject
+    # staging a conflicting id up front).
+    with ops.store.staging_session():
+        p_entity = GtsEntity(content=_schema(parent, "staged"), cfg=ops.cfg)
+        c_entity = GtsEntity(content=_schema(child, "ok"), cfg=ops.cfg)
+        c_token = ops.store.stage(c_entity)
+        p_token = ops.store.stage(p_entity)
+        outcomes = ops.store.commit_batch([c_token, p_token])
+        assert outcomes == ["conflict", "conflict"]
+
+    # Nothing from the batch was published; the parent keeps its committed content.
+    assert ops.store.get_committed(child) is None
+    assert ops.store.get_committed(parent).content["title"] == "committed"

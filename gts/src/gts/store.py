@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import copy
 import logging
 import threading
@@ -38,6 +39,14 @@ from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref, extended_validator_for
 
 logger = logging.getLogger(__name__)
+
+# The staging session active on the current thread/task. A staged entry is
+# overlaid onto internal reads (``get``, the reference registry) only while its
+# OWN session is active, so one request's not-yet-validated staged entries never
+# leak into another request's validation. ``None`` means committed-only.
+_active_staging_session: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "gts_active_staging_session", default=None
+)
 
 
 def _require_schema_id(value: str) -> GtsID:
@@ -150,11 +159,13 @@ class GtsStore:
         # Keyed by a unique staging TOKEN (not the registry key) so two entries
         # that resolve to the same id - a duplicated batch entry or two
         # concurrent batches - never clobber each other, and commit/discard only
-        # affect the entry they name. ``_staged_by_key`` is the by-key overlay
-        # ``get`` and the reference registry consult; it holds the most recently
-        # staged entity per key and is recomputed on commit/discard.
-        self._staged: dict[str, tuple[str, GtsEntity]] = {}
-        self._staged_by_key: dict[str, GtsEntity] = {}
+        # affect the entry they name. Each entry also records the staging SESSION
+        # it belongs to. ``_staged_by_key`` is the by-key overlay ``get`` and the
+        # reference registry consult, but scoped per session: it maps
+        # session -> key -> most-recently-staged entity, so a snapshot only ever
+        # overlays its own session's staged entries and never another request's.
+        self._staged: dict[str, tuple[str, GtsEntity, str]] = {}
+        self._staged_by_key: dict[str, dict[str, GtsEntity]] = {}
         self._stage_seq = 0
         self._reader = reader
         self._lock = threading.RLock()
@@ -256,10 +267,12 @@ class GtsStore:
         scheme themselves.
         """
         entity_id = strip_scheme(entity_id)
-        with self._lock:
-            staged = self._staged_by_key.get(entity_id)
-            if staged is not None:
-                return copy.deepcopy(staged)
+        session = _active_staging_session.get()
+        if session is not None:
+            with self._lock:
+                staged = self._staged_by_key.get(session, {}).get(entity_id)
+                if staged is not None:
+                    return copy.deepcopy(staged)
         return self.get_committed(entity_id)
 
     def get_committed(self, entity_id: str) -> GtsEntity | None:
@@ -298,30 +311,53 @@ class GtsStore:
             return entity.raw_id
         raise ValueError("Entity must have a valid gts_id or raw_id")
 
+    @contextmanager
+    def staging_session(self, session_id: str | None = None):
+        """Bind a staging SESSION for the duration of the block so every
+        :meth:`stage` inside it, and the internal reads (:meth:`get`, the
+        reference registry) that a validation performs, share one isolated
+        overlay. Entries staged under this session are visible only while this
+        session is active, so one request never observes another's unvalidated
+        staged entries. Returns the session id."""
+        session_id = session_id or f"ses-{uuid.uuid4().hex}"
+        token = _active_staging_session.set(session_id)
+        try:
+            yield session_id
+        finally:
+            _active_staging_session.reset(token)
+
     def stage(self, entity: GtsEntity) -> str:
         """Place an entity into the staging overlay WITHOUT publishing it, and
         return a unique staging token. A staged entity is visible to internal
-        validation but invisible to public reads until :meth:`commit`. Callers
-        MUST eventually :meth:`commit` or :meth:`discard` the returned token."""
+        validation (only within its own :meth:`staging_session`) but invisible to
+        public reads until :meth:`commit`. Callers MUST eventually :meth:`commit`
+        or :meth:`discard` the returned token."""
         stored = copy.deepcopy(entity)
         key = self._entity_key(stored)
+        # No active session => a private per-entry session, so the entry is
+        # visible to no snapshot.
         with self._lock:
             self._stage_seq += 1
             token = f"stg-{self._stage_seq}"
-            self._staged[token] = (key, stored)
-            self._staged_by_key[key] = stored
-            self._invalidate_reference_registry()
+            session = _active_staging_session.get() or token
+            self._staged[token] = (key, stored, session)
+            self._staged_by_key.setdefault(session, {})[key] = stored
         return token
 
-    def _remove_staged_locked(self, token: str, key: str) -> None:
+    def _remove_staged_locked(self, token: str, key: str, session: str) -> None:
         """Drop the staged entry named by ``token`` and rebuild the by-key
-        overlay for ``key`` from any other tokens that still target it. The
-        caller must hold ``self._lock``."""
+        overlay for ``key`` within ``session`` from any other tokens that still
+        target it. The caller must hold ``self._lock``."""
         self._staged.pop(token, None)
-        self._staged_by_key.pop(key, None)
-        for other_key, other_entity in self._staged.values():
-            if other_key == key:
-                self._staged_by_key[key] = other_entity
+        session_overlay = self._staged_by_key.get(session)
+        if session_overlay is None:
+            return
+        session_overlay.pop(key, None)
+        for other_key, other_entity, other_session in self._staged.values():
+            if other_session == session and other_key == key:
+                session_overlay[key] = other_entity
+        if not session_overlay:
+            self._staged_by_key.pop(session, None)
 
     def commit(self, token: str, allow_updates: bool = False) -> str:
         """Publish the entity named by ``token``, making it visible to public
@@ -334,20 +370,72 @@ class GtsStore:
             entry = self._staged.get(token)
             if entry is None:
                 return "conflict"
-            key, staged = entry
-            self._remove_staged_locked(token, key)
+            key, staged, session = entry
+            self._remove_staged_locked(token, key, session)
             existing = self._by_id.get(key)
             if (
                 existing is not None
                 and not allow_updates
                 and existing.content != staged.content
             ):
-                self._invalidate_reference_registry()
                 return "conflict"
             outcome = "unchanged" if existing is not None else "added"
             self._by_id[key] = staged
             self._invalidate_reference_registry()
             return outcome
+
+    def commit_batch(
+        self, tokens: list[str], allow_updates: bool = False
+    ) -> list[str]:
+        """Atomically publish a whole set of staged ``tokens`` as one
+        all-or-nothing unit. Every token's target is checked against the
+        committed store (and against its batch siblings) under a single lock; if
+        ANY would conflict - a concurrent commit won the id with different
+        content, an intra-batch duplicate disagrees, or a token is unknown -
+        NOTHING is published. This closes the gap where a per-entry commit loop
+        could publish a dependent schema against a target whose content changed
+        after the dependent was validated. Returns one outcome per token,
+        positionally aligned with ``tokens``; on a batch conflict the whole set
+        reports ``"conflict"`` and the tokens remain staged for the caller to
+        discard."""
+        with self._lock:
+            outcomes: list[str] = []
+            entries: list[tuple[str, GtsEntity, str] | None] = []
+            pending_by_key: dict[str, GtsEntity] = {}
+            any_conflict = False
+            for token in tokens:
+                entry = self._staged.get(token)
+                if entry is None:
+                    entries.append(None)
+                    outcomes.append("conflict")
+                    any_conflict = True
+                    continue
+                key, staged, _session = entry
+                entries.append(entry)
+                existing = pending_by_key.get(key, self._by_id.get(key))
+                if existing is not None:
+                    identical = existing.content == staged.content
+                    outcome = "unchanged" if identical or allow_updates else "conflict"
+                    if outcome == "conflict":
+                        any_conflict = True
+                    outcomes.append(outcome)
+                else:
+                    outcomes.append("added")
+                pending_by_key[key] = staged
+
+            # All-or-nothing: if any target conflicts, publish none and report
+            # every entry as a conflict. The tokens stay staged for the caller.
+            if any_conflict:
+                return ["conflict"] * len(tokens)
+
+            for token, entry, outcome in zip(tokens, entries, outcomes):
+                assert entry is not None
+                key, staged, session = entry
+                self._remove_staged_locked(token, key, session)
+                if outcome == "added":
+                    self._by_id[key] = staged
+            self._invalidate_reference_registry()
+            return outcomes
 
     def discard(self, token: str) -> None:
         """Drop the staged entity named by ``token`` that failed validation. The
@@ -356,8 +444,7 @@ class GtsStore:
         with self._lock:
             entry = self._staged.get(token)
             if entry is not None:
-                self._remove_staged_locked(token, entry[0])
-                self._invalidate_reference_registry()
+                self._remove_staged_locked(token, entry[0], entry[2])
 
     def get_schema_content(self, type_id: str) -> dict[str, Any]:
         """Get schema content as dict (legacy method for backward compatibility)."""
@@ -366,24 +453,40 @@ class GtsStore:
             return entity.content
         raise KeyError(f"Schema not found: {type_id}")
 
+    @staticmethod
+    def _registry_with_schemas(
+        registry: Registry, entities: dict[str, GtsEntity]
+    ) -> Registry:
+        for entity_id, entity in entities.items():
+            if entity.is_schema and isinstance(entity.content, dict):
+                resource = Resource.from_contents(
+                    _without_x_gts_ref(entity.content),
+                    default_specification=DRAFT202012,
+                )
+                registry = registry.with_resource(with_scheme(entity_id), resource)
+        return registry
+
     def _create_reference_registry(self) -> Registry:
         with self._lock:
-            if self._reference_registry is not None:
-                return self._reference_registry
-            registry = Registry()
-            # Committed entities plus the staging overlay (staged overrides a
-            # committed entry of the same id), so a schema being validated as
-            # part of a batch resolves `$ref`s to its not-yet-committed siblings.
-            merged = {**self._by_id, **self._staged_by_key}
-            for entity_id, entity in merged.items():
-                if entity.is_schema and isinstance(entity.content, dict):
-                    resource = Resource.from_contents(
-                        _without_x_gts_ref(entity.content),
-                        default_specification=DRAFT202012,
-                    )
-                    registry = registry.with_resource(with_scheme(entity_id), resource)
-            self._reference_registry = registry
-            return registry
+            # The committed-only registry is cached and only invalidated when the
+            # committed set changes (never on stage/discard), so staging never
+            # corrupts another request's view.
+            if self._reference_registry is None:
+                self._reference_registry = self._registry_with_schemas(
+                    Registry(), self._by_id
+                )
+            committed = self._reference_registry
+            # Overlay ONLY the active session's staged schemas (staged overrides a
+            # committed entry of the same id), so a schema being validated as part
+            # of a batch resolves `$ref`s to its own not-yet-committed siblings -
+            # and never to another request's staged entries.
+            session = _active_staging_session.get()
+            if session is None:
+                return committed
+            session_overlay = self._staged_by_key.get(session)
+            if not session_overlay:
+                return committed
+            return self._registry_with_schemas(committed, session_overlay)
 
     def items(self):
         """Return all entity ID and entity pairs."""

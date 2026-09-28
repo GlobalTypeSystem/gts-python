@@ -462,28 +462,32 @@ class GtsOps:
         # observes an entity that has not passed validation, and the committed
         # state (any prior version under this id) is never touched. No lock is
         # held across validation, so concurrent reads are not blocked.
-        token = self.store.stage(entity)
-        try:
-            if entity.is_schema:
-                self.store.validate_schema_basic(store_key)
-                if validate:
-                    self.store.validate_schema(store_key, gts_ref_validation)
-            elif validate:
-                self.store.validate_instance(store_key, gts_ref_validation)
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            self.store.discard(token)
-            return GtsAddEntityResult(
-                ok=False,
-                error=f"Validation failed: {e!s}",
-                is_type_schema=entity.is_schema,
-            )
-        if self.store.commit(token, self.allow_entity_updates) == "conflict":
-            return GtsAddEntityResult(
-                ok=False,
-                error=f"Entity '{store_key}' is already registered with different content",
-                is_type_schema=entity.is_schema,
-                conflict=True,
-            )
+        # A staging session isolates this registration's own staged entity so its
+        # validation resolves itself but never another concurrent request's
+        # not-yet-validated staged entries.
+        with self.store.staging_session():
+            token = self.store.stage(entity)
+            try:
+                if entity.is_schema:
+                    self.store.validate_schema_basic(store_key)
+                    if validate:
+                        self.store.validate_schema(store_key, gts_ref_validation)
+                elif validate:
+                    self.store.validate_instance(store_key, gts_ref_validation)
+            except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
+                self.store.discard(token)
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Validation failed: {e!s}",
+                    is_type_schema=entity.is_schema,
+                )
+            if self.store.commit(token, self.allow_entity_updates) == "conflict":
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Entity '{store_key}' is already registered with different content",
+                    is_type_schema=entity.is_schema,
+                    conflict=True,
+                )
 
         # Return gts_id if available, otherwise raw_id
         entity_id = entity.gts_id.id if entity.gts_id else (entity.raw_id or "")
@@ -617,66 +621,81 @@ class GtsOps:
         # the leftovers (in the finally block) instead of leaking unvalidated
         # entries into the staging overlay.
         pending: set[str] = set()
-        try:
-            # Phase 1: stage every structurally-valid entry.
-            # survivors: (index, type_id, entity, store_key, token)
-            survivors: list[tuple[int, str, GtsEntity, str, str]] = []
-            for index, schema in enumerate(schemas):
-                prepared = self._prepare_type_schema(schema)
-                if isinstance(prepared, GtsAddSchemaResult):
-                    results[index] = prepared
-                    continue
-                type_id, entity, store_key = prepared
-                token = self.store.stage(entity)
-                pending.add(token)
-                survivors.append((index, type_id, entity, store_key, token))
+        # One staging session for the whole batch: entries resolve their own
+        # intra-batch siblings, while another request's staged entries stay
+        # invisible to this batch's validation.
+        with self.store.staging_session():
+            try:
+                # Phase 1: stage every structurally-valid entry.
+                # survivors: (index, type_id, entity, store_key, token)
+                survivors: list[tuple[int, str, GtsEntity, str, str]] = []
+                for index, schema in enumerate(schemas):
+                    prepared = self._prepare_type_schema(schema)
+                    if isinstance(prepared, GtsAddSchemaResult):
+                        results[index] = prepared
+                        continue
+                    type_id, entity, store_key = prepared
+                    token = self.store.stage(entity)
+                    pending.add(token)
+                    survivors.append((index, type_id, entity, store_key, token))
 
-            # Phase 2: validate the staged entries, discarding failures and
-            # RE-validating the survivors against the now-smaller staged set until
-            # a round produces no new failures. This stops an entry that only
-            # validated because a sibling was staged (e.g. its parent or $ref
-            # target) from being committed after that sibling was discarded.
-            while True:
-                still_good: list[tuple[int, str, GtsEntity, str, str]] = []
-                failed: list[tuple[int, str, str, str]] = []
-                for index, type_id, entity, store_key, token in survivors:
-                    error = self._validate_staged(
-                        entity, store_key, True, gts_ref_validation
-                    )
-                    if error is None:
-                        still_good.append((index, type_id, entity, store_key, token))
+                # Phase 2: validate the staged entries, discarding failures and
+                # RE-validating the survivors against the now-smaller staged set
+                # until a round produces no new failures. This stops an entry that
+                # only validated because a sibling was staged (e.g. its parent or
+                # $ref target) from being committed after that sibling was discarded.
+                while True:
+                    still_good: list[tuple[int, str, GtsEntity, str, str]] = []
+                    failed: list[tuple[int, str, str, str]] = []
+                    for index, type_id, entity, store_key, token in survivors:
+                        error = self._validate_staged(
+                            entity, store_key, True, gts_ref_validation
+                        )
+                        if error is None:
+                            still_good.append(
+                                (index, type_id, entity, store_key, token)
+                            )
+                        else:
+                            failed.append((index, type_id, token, error))
+                    if not failed:
+                        break
+                    for index, type_id, token, error in failed:
+                        self.store.discard(token)
+                        pending.discard(token)
+                        results[index] = GtsAddSchemaResult(
+                            ok=False, type_id=type_id, error=error
+                        )
+                    survivors = still_good
+
+                # Phase 3: publish the survivors AS ONE ATOMIC UNIT. A per-entry
+                # commit loop could publish a dependent schema after a concurrent
+                # batch won its parent or $ref target id with different content
+                # than the dependent was validated against; the store-level batch
+                # compare-and-swap publishes none if any target conflicts.
+                survivor_tokens = [token for _i, _t, _e, _sk, token in survivors]
+                outcomes = self.store.commit_batch(
+                    survivor_tokens, self.allow_entity_updates
+                )
+                for (index, type_id, _entity, store_key, token), outcome in zip(
+                    survivors, outcomes
+                ):
+                    if outcome == "conflict":
+                        # Nothing was published for a conflicting entry; leave its
+                        # token in `pending` so the finally discards it.
+                        results[index] = GtsAddSchemaResult(
+                            ok=False,
+                            type_id=type_id,
+                            error=f"Entity '{store_key}' is already registered with different content",
+                            conflict=True,
+                        )
                     else:
-                        failed.append((index, type_id, token, error))
-                if not failed:
-                    break
-                for index, type_id, token, error in failed:
+                        pending.discard(token)
+                        results[index] = GtsAddSchemaResult(ok=True, type_id=type_id)
+            finally:
+                # Discard anything still staged (e.g. a validation call raised) so
+                # no unvalidated entry lingers in the staging overlay.
+                for token in pending:
                     self.store.discard(token)
-                    pending.discard(token)
-                    results[index] = GtsAddSchemaResult(
-                        ok=False, type_id=type_id, error=error
-                    )
-                survivors = still_good
-
-            # Phase 3: publish the entries that passed. A commit can still report
-            # a conflict if the same id was already committed with different
-            # content in the meantime.
-            for index, type_id, _entity, store_key, token in survivors:
-                outcome = self.store.commit(token, self.allow_entity_updates)
-                pending.discard(token)
-                if outcome == "conflict":
-                    results[index] = GtsAddSchemaResult(
-                        ok=False,
-                        type_id=type_id,
-                        error=f"Entity '{store_key}' is already registered with different content",
-                        conflict=True,
-                    )
-                else:
-                    results[index] = GtsAddSchemaResult(ok=True, type_id=type_id)
-        finally:
-            # Discard anything still staged (e.g. a validation call raised) so no
-            # unvalidated entry lingers in the staging overlay.
-            for token in pending:
-                self.store.discard(token)
 
         final = [r for r in results if r is not None]
         return GtsAddSchemasResult(ok=all(r.ok for r in final), results=final)
@@ -699,18 +718,24 @@ class GtsOps:
         if isinstance(prepared, GtsAddSchemaResult):
             return prepared
         type_id, entity, store_key = prepared
-        token = self.store.stage(entity)
-        error = self._validate_staged(entity, store_key, validate, gts_ref_validation)
-        if error is not None:
-            self.store.discard(token)
-            return GtsAddSchemaResult(ok=False, type_id=type_id, error=error)
-        if self.store.commit(token, self.allow_entity_updates) == "conflict":
-            return GtsAddSchemaResult(
-                ok=False,
-                type_id=type_id,
-                error=f"Entity '{store_key}' is already registered with different content",
-                conflict=True,
+        # A staging session isolates this schema's own staged entity so its
+        # validation resolves itself but never another concurrent request's
+        # not-yet-validated staged entries.
+        with self.store.staging_session():
+            token = self.store.stage(entity)
+            error = self._validate_staged(
+                entity, store_key, validate, gts_ref_validation
             )
+            if error is not None:
+                self.store.discard(token)
+                return GtsAddSchemaResult(ok=False, type_id=type_id, error=error)
+            if self.store.commit(token, self.allow_entity_updates) == "conflict":
+                return GtsAddSchemaResult(
+                    ok=False,
+                    type_id=type_id,
+                    error=f"Entity '{store_key}' is already registered with different content",
+                    conflict=True,
+                )
         return GtsAddSchemaResult(ok=True, type_id=type_id)
 
     def validate_id(self, gts_id: str) -> GtsIdValidationResult:
