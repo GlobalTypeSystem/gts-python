@@ -384,9 +384,7 @@ class GtsStore:
             self._invalidate_reference_registry()
             return outcome
 
-    def commit_batch(
-        self, tokens: list[str], allow_updates: bool = False
-    ) -> list[str]:
+    def commit_batch(self, tokens: list[str], allow_updates: bool = False) -> list[str]:
         """Atomically publish a whole set of staged ``tokens`` as one
         all-or-nothing unit. Every token's target is checked against the
         committed store (and against its batch siblings) under a single lock; if
