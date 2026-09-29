@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path as SysPath
 from typing import Any
 
-from ._naming import looks_like_gts
+from ._naming import GTS_PREFIX, GTS_URI_PREFIX, looks_like_gts, strip_scheme
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
 from .gts import GtsID, GtsWildcard
@@ -291,20 +291,32 @@ class GtsAddEntitiesResult:
 
 @dataclass
 class GtsAddSchemaResult:
-    """Result of adding a schema to the store."""
+    """Result of adding a single GTS Type Schema to the store."""
 
     ok: bool
-    id: str = ""
+    type_id: str | None = None
     error: str = ""
     conflict: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"ok": self.ok}
-        if self.ok:
-            result["id"] = self.id
-        else:
+        result: dict[str, Any] = {"ok": self.ok, "type_id": self.type_id}
+        if not self.ok:
             result["error"] = self.error
         return result
+
+
+@dataclass
+class GtsAddSchemasResult:
+    """Result of registering a batch of GTS Type Schemas."""
+
+    ok: bool
+    results: list[GtsAddSchemaResult]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "results": [r.to_dict() for r in self.results],
+        }
 
 
 @dataclass
@@ -424,8 +436,15 @@ class GtsOps:
                 is_type_schema=entity.is_schema,
             )
 
-        store_key = entity.gts_id.id if entity.is_schema else entity.raw_id
-        previous = self.store.get(store_key)
+        # Both branches are guaranteed non-None by the guards above: a schema
+        # without gts_id and an instance without raw_id have already returned.
+        if entity.is_schema:
+            assert entity.gts_id is not None
+            store_key = entity.gts_id.id
+        else:
+            assert entity.raw_id is not None
+            store_key = entity.raw_id
+        previous = self.store.get_committed(store_key)
         if (
             previous
             and not self.allow_entity_updates
@@ -437,26 +456,38 @@ class GtsOps:
                 is_type_schema=entity.is_schema,
                 conflict=True,
             )
-        self.store.register(entity)
 
-        try:
-            if entity.is_schema:
-                self.store.validate_schema_basic(entity.gts_id.id)
-                if validate:
-                    self.store.validate_schema(entity.gts_id.id, gts_ref_validation)
-            elif validate:
-                self.store.validate_instance(
-                    entity.raw_id or entity.gts_id.id, gts_ref_validation
+        # Stage the entity (invisible to public reads) and validate it before
+        # publishing. A failure discards the staged copy, so a reader never
+        # observes an entity that has not passed validation, and the committed
+        # state (any prior version under this id) is never touched. No lock is
+        # held across validation, so concurrent reads are not blocked.
+        # A staging session isolates this registration's own staged entity so its
+        # validation resolves itself but never another concurrent request's
+        # not-yet-validated staged entries.
+        with self.store.staging_session():
+            token = self.store.stage(entity)
+            try:
+                if entity.is_schema:
+                    self.store.validate_schema_basic(store_key)
+                    if validate:
+                        self.store.validate_schema(store_key, gts_ref_validation)
+                elif validate:
+                    self.store.validate_instance(store_key, gts_ref_validation)
+            except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
+                self.store.discard(token)
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Validation failed: {e!s}",
+                    is_type_schema=entity.is_schema,
                 )
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            self.store.unregister(store_key)
-            if previous:
-                self.store.register(previous)
-            return GtsAddEntityResult(
-                ok=False,
-                error=f"Validation failed: {e!s}",
-                is_type_schema=entity.is_schema,
-            )
+            if self.store.commit(token, self.allow_entity_updates) == "conflict":
+                return GtsAddEntityResult(
+                    ok=False,
+                    error=f"Entity '{store_key}' is already registered with different content",
+                    is_type_schema=entity.is_schema,
+                    conflict=True,
+                )
 
         # Return gts_id if available, otherwise raw_id
         entity_id = entity.gts_id.id if entity.gts_id else (entity.raw_id or "")
@@ -476,23 +507,238 @@ class GtsOps:
         ok = all(r.ok for r in results)
         return GtsAddEntitiesResult(ok=ok, results=results)
 
-    def add_schema(self, type_id: str, schema: dict[str, Any]) -> GtsAddSchemaResult:
+    def _validate_staged(
+        self,
+        entity: GtsEntity,
+        store_key: str,
+        validate: bool,
+        gts_ref_validation: GtsRefValidationMode,
+    ) -> str | None:
+        """Validate a staged entity against the current (staged + committed)
+        set, returning an error message on failure or ``None`` on success. The
+        caller stages before and commits/discards after."""
         try:
-            previous = self.store.get(type_id)
-            if (
-                previous
-                and not self.allow_entity_updates
-                and previous.content != schema
-            ):
+            if entity.is_schema:
+                self.store.validate_schema_basic(store_key)
+                if validate:
+                    self.store.validate_schema(store_key, gts_ref_validation)
+            elif validate:
+                self.store.validate_instance(store_key, gts_ref_validation)
+        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
+            return f"Validation failed: {e!s}"
+        return None
+
+    def _prepare_type_schema(
+        self, schema: dict[str, Any]
+    ) -> tuple[str, GtsEntity, str] | GtsAddSchemaResult:
+        """Run the batch-specific $schema/$id checks and build the entity. On
+        success returns ``(type_id, entity, store_key)``; on failure returns the
+        per-item error result. Does not stage or register anything."""
+        if not isinstance(schema, dict):
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema entry must be a JSON object",
+            )
+        dialect = schema.get("$schema")
+        if not isinstance(dialect, str) or not dialect:
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema must contain a top-level $schema field",
+            )
+        embedded_id = schema.get("$id")
+        if not isinstance(embedded_id, str) or not embedded_id.startswith(
+            GTS_URI_PREFIX + GTS_PREFIX
+        ):
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=None,
+                error="GTS Type Schema must contain a top-level $id in gts:// form",
+            )
+        type_id = strip_scheme(embedded_id)
+        try:
+            GtsID.parse_type(type_id)
+        except ValueError:
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=type_id,
+                error=f"Invalid GTS Type Schema $id: {embedded_id}",
+            )
+        entity = GtsEntity(content=schema, cfg=self.cfg)
+        if not entity.is_schema or not entity.gts_id:
+            return GtsAddSchemaResult(
+                ok=False, type_id=type_id, error="Unable to detect GTS ID in schema"
+            )
+        store_key = entity.gts_id.id
+        previous = self.store.get_committed(store_key)
+        if (
+            previous
+            and not self.allow_entity_updates
+            and previous.content != entity.content
+        ):
+            return GtsAddSchemaResult(
+                ok=False,
+                type_id=type_id,
+                error=f"Entity '{store_key}' is already registered with different content",
+                conflict=True,
+            )
+        return (type_id, entity, store_key)
+
+    def add_schemas(
+        self,
+        schemas: builtins.list[dict[str, Any]],
+        validate: bool = False,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
+    ) -> GtsAddSchemasResult:
+        """Register a batch of GTS Type Schemas.
+
+        Each entry's GTS Type Identifier is derived from its embedded ``$id``;
+        the aggregate ``ok`` is ``True`` only when every entry registered.
+        ``validate`` / ``gts_ref_validation`` apply to every entry exactly as
+        they do on ``POST /entities``.
+
+        With ``validate`` the batch runs in two phases so the outcome is
+        order-independent and nothing invalid is ever published: every
+        structurally-valid entry is staged first (invisible to public reads),
+        then each is validated against the fully-staged set - so an entry can
+        resolve intra-batch references/ancestors regardless of position - and
+        finally the entries that passed are committed while the rest are
+        discarded.
+        """
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
+        if not validate:
+            direct_results = [
+                self.add_schema(
+                    schema, validate=False, gts_ref_validation=gts_ref_validation
+                )
+                for schema in schemas
+            ]
+            return GtsAddSchemasResult(
+                ok=all(r.ok for r in direct_results), results=direct_results
+            )
+
+        results: list[GtsAddSchemaResult | None] = [None] * len(schemas)
+        # Track every still-staged token so an exception anywhere below discards
+        # the leftovers (in the finally block) instead of leaking unvalidated
+        # entries into the staging overlay.
+        pending: set[str] = set()
+        # One staging session for the whole batch: entries resolve their own
+        # intra-batch siblings, while another request's staged entries stay
+        # invisible to this batch's validation.
+        with self.store.staging_session():
+            try:
+                # Phase 1: stage every structurally-valid entry.
+                # survivors: (index, type_id, entity, store_key, token)
+                survivors: list[tuple[int, str, GtsEntity, str, str]] = []
+                for index, schema in enumerate(schemas):
+                    prepared = self._prepare_type_schema(schema)
+                    if isinstance(prepared, GtsAddSchemaResult):
+                        results[index] = prepared
+                        continue
+                    type_id, entity, store_key = prepared
+                    token = self.store.stage(entity)
+                    pending.add(token)
+                    survivors.append((index, type_id, entity, store_key, token))
+
+                # Phase 2: validate the staged entries, discarding failures and
+                # RE-validating the survivors against the now-smaller staged set
+                # until a round produces no new failures. This stops an entry that
+                # only validated because a sibling was staged (e.g. its parent or
+                # $ref target) from being committed after that sibling was discarded.
+                while True:
+                    still_good: list[tuple[int, str, GtsEntity, str, str]] = []
+                    failed: list[tuple[int, str, str, str]] = []
+                    for index, type_id, entity, store_key, token in survivors:
+                        error = self._validate_staged(
+                            entity, store_key, True, gts_ref_validation
+                        )
+                        if error is None:
+                            still_good.append(
+                                (index, type_id, entity, store_key, token)
+                            )
+                        else:
+                            failed.append((index, type_id, token, error))
+                    if not failed:
+                        break
+                    for index, type_id, token, error in failed:
+                        self.store.discard(token)
+                        pending.discard(token)
+                        results[index] = GtsAddSchemaResult(
+                            ok=False, type_id=type_id, error=error
+                        )
+                    survivors = still_good
+
+                # Phase 3: publish the survivors AS ONE ATOMIC UNIT. A per-entry
+                # commit loop could publish a dependent schema after a concurrent
+                # batch won its parent or $ref target id with different content
+                # than the dependent was validated against; the store-level batch
+                # compare-and-swap publishes none if any target conflicts.
+                survivor_tokens = [token for _i, _t, _e, _sk, token in survivors]
+                outcomes = self.store.commit_batch(
+                    survivor_tokens, self.allow_entity_updates
+                )
+                for (index, type_id, _entity, store_key, token), outcome in zip(
+                    survivors, outcomes
+                ):
+                    if outcome == "conflict":
+                        # Nothing was published for a conflicting entry; leave its
+                        # token in `pending` so the finally discards it.
+                        results[index] = GtsAddSchemaResult(
+                            ok=False,
+                            type_id=type_id,
+                            error=f"Entity '{store_key}' is already registered with different content",
+                            conflict=True,
+                        )
+                    else:
+                        pending.discard(token)
+                        results[index] = GtsAddSchemaResult(ok=True, type_id=type_id)
+            finally:
+                # Discard anything still staged (e.g. a validation call raised) so
+                # no unvalidated entry lingers in the staging overlay.
+                for token in pending:
+                    self.store.discard(token)
+
+        final = [r for r in results if r is not None]
+        return GtsAddSchemasResult(ok=all(r.ok for r in final), results=final)
+
+    def add_schema(
+        self,
+        schema: dict[str, Any],
+        validate: bool = False,
+        gts_ref_validation: GtsRefValidationMode = GtsRefValidationMode.ANY_VALID,
+    ) -> GtsAddSchemaResult:
+        """Register a single GTS Type Schema, deriving its type_id from ``$id``.
+
+        Stages the entity (invisible to public reads), validates it, then
+        commits on success or discards on failure, so each entry honors
+        ``validate`` / ``gts_ref_validation`` exactly like a ``POST /entities``
+        call and an invalid schema is never observable.
+        """
+        gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
+        prepared = self._prepare_type_schema(schema)
+        if isinstance(prepared, GtsAddSchemaResult):
+            return prepared
+        type_id, entity, store_key = prepared
+        # A staging session isolates this schema's own staged entity so its
+        # validation resolves itself but never another concurrent request's
+        # not-yet-validated staged entries.
+        with self.store.staging_session():
+            token = self.store.stage(entity)
+            error = self._validate_staged(
+                entity, store_key, validate, gts_ref_validation
+            )
+            if error is not None:
+                self.store.discard(token)
+                return GtsAddSchemaResult(ok=False, type_id=type_id, error=error)
+            if self.store.commit(token, self.allow_entity_updates) == "conflict":
                 return GtsAddSchemaResult(
                     ok=False,
-                    error=f"Entity '{type_id}' is already registered with different content",
+                    type_id=type_id,
+                    error=f"Entity '{store_key}' is already registered with different content",
                     conflict=True,
                 )
-            self.store.register_schema(type_id, schema)
-            return GtsAddSchemaResult(ok=True, id=type_id)
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            return GtsAddSchemaResult(ok=False, error=str(e))
+        return GtsAddSchemaResult(ok=True, type_id=type_id)
 
     def validate_id(self, gts_id: str) -> GtsIdValidationResult:
         # Check if it's a wildcard pattern (contains *)
@@ -522,6 +768,7 @@ class GtsOps:
         # Check if it's a wildcard pattern (contains *)
         is_wildcard = "*" in gts_id
         try:
+            parsed: GtsID
             if is_wildcard:
                 parsed = GtsWildcard(gts_id)
                 segs = parsed.gts_id_segments
@@ -644,8 +891,10 @@ class GtsOps:
 
         try:
             if entity.is_schema:
-                self.store.validate_schema_content(entity.gts_id.id, content)  # type: ignore[union-attr]
+                assert entity.gts_id is not None
+                self.store.validate_schema_content(entity.gts_id.id, content)
             else:
+                assert entity.type_id is not None
                 self.store.validate_instance_content(content, entity.type_id)
         except Exception as error:  # noqa: BLE001 - converted to a result object at API boundary
             error_message = str(error)
@@ -775,7 +1024,8 @@ class GtsOps:
             GtsGetEntityResult with entity details or error
         """
         try:
-            entity = self.store.get(gts_id)
+            # Public read: never expose a staged (not-yet-committed) entity.
+            entity = self.store.get_committed(gts_id)
             if not entity:
                 return GtsGetEntityResult(
                     ok=False, error=f"Entity '{gts_id}' not found"

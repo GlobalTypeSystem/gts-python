@@ -5,46 +5,46 @@ from gts.x_gts_ref import X_GTS_REF_SELF, XGtsRefValidator
 
 class TestValidateSchema:
     def test_valid_absolute_pattern(self):
-        errors = XGtsRefValidator().validate_schema(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema(
             {"x-gts-ref": "gts.x.test._.foo.v1~"}
         )
         assert errors == []
 
     def test_valid_wildcard_pattern(self):
-        errors = XGtsRefValidator().validate_schema({"x-gts-ref": "gts.*"})
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema({"x-gts-ref": "gts.*"})
         assert errors == []
 
     def test_valid_prefix_wildcard(self):
-        errors = XGtsRefValidator().validate_schema({"x-gts-ref": "gts.x.test.*"})
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema({"x-gts-ref": "gts.x.test.*"})
         assert errors == []
 
     def test_invalid_wildcard_prefix_direct(self):
-        error = XGtsRefValidator()._validate_gts_id_or_pattern("notgts*", "path")
+        error = XGtsRefValidator(inherited_dialect="draft-07")._validate_gts_id_or_pattern("notgts*", "path")
         assert error is not None
         assert "Invalid GTS wildcard pattern" in error.reason
 
     def test_invalid_specific_gts_id(self):
-        errors = XGtsRefValidator().validate_schema({"x-gts-ref": "gts.bad id"})
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema({"x-gts-ref": "gts.bad id"})
         assert len(errors) == 1
         assert "Invalid GTS identifier" in errors[0].reason
 
     def test_non_string_ref_value(self):
-        errors = XGtsRefValidator().validate_schema({"x-gts-ref": 123})
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema({"x-gts-ref": 123})
         assert len(errors) == 1
         assert "must be a string" in errors[0].reason
 
     def test_invalid_prefix_value(self):
-        errors = XGtsRefValidator().validate_schema({"x-gts-ref": "nope"})
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema({"x-gts-ref": "nope"})
         assert len(errors) == 1
         assert "must be a GTS identifier" in errors[0].reason
 
     def test_selected_type_self_reference_is_valid(self):
-        validator = XGtsRefValidator()
+        validator = XGtsRefValidator(inherited_dialect="draft-07")
         assert validator.is_self_reference(X_GTS_REF_SELF)
         assert validator.validate_schema({"x-gts-ref": X_GTS_REF_SELF}) == []
 
     def test_other_pointers_are_invalid(self):
-        validator = XGtsRefValidator()
+        validator = XGtsRefValidator(inherited_dialect="draft-07")
         for pointer in ("/missing/path", "/properties/id"):
             errors = validator.validate_schema({"x-gts-ref": pointer})
             assert len(errors) == 1
@@ -56,13 +56,13 @@ class TestValidateSchema:
                 "child": {"x-gts-ref": "notgts.*"},
             }
         }
-        errors = XGtsRefValidator().validate_schema(schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema(schema)
         assert len(errors) == 1
         assert "properties/child/x-gts-ref" in errors[0].field_path
 
     def test_recurses_into_list_of_dicts(self):
         schema = {"allOf": [{"x-gts-ref": "notgts.*"}]}
-        errors = XGtsRefValidator().validate_schema(schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema(schema)
         assert len(errors) == 1
         assert "allOf[0]/x-gts-ref" in errors[0].field_path
 
@@ -75,7 +75,7 @@ class TestValidateSchema:
                 }
             }
         }
-        assert XGtsRefValidator().validate_schema(schema) == []
+        assert XGtsRefValidator(inherited_dialect="draft-07").validate_schema(schema) == []
 
     def test_property_named_x_gts_ref_is_not_a_keyword(self):
         schema = {
@@ -83,7 +83,7 @@ class TestValidateSchema:
                 "x-gts-ref": {"x-gts-ref": "notgts.*"},
             }
         }
-        errors = XGtsRefValidator().validate_schema(schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema(schema)
         assert len(errors) == 1
         assert errors[0].field_path == "properties/x-gts-ref/x-gts-ref"
 
@@ -94,7 +94,7 @@ class TestValidateSchema:
             "type": ["object", {"x-gts-ref": "invalid-type"}],
             "disallow": ["array", {"x-gts-ref": "invalid-disallow"}],
         }
-        errors = XGtsRefValidator().validate_schema(schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_schema(schema)
         assert [error.field_path for error in errors] == [
             "extends/x-gts-ref",
             "type[1]/x-gts-ref",
@@ -108,7 +108,7 @@ class TestValidateSchemaRefExistence:
             def get(self, value):
                 return None
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_schema_ref_existence(
             {"properties": {"ref": {"x-gts-ref": "gts.x.test._.foo.v1~"}}}
         )
 
@@ -127,7 +127,7 @@ class TestValidateSchemaRefExistence:
             def items(self):
                 return [("gts.x.test._.foo.v1~", object())]
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_schema_ref_existence(
             {
                 "allOf": [
                     {"x-gts-ref": "gts.x.test._.foo.v1~"},
@@ -143,7 +143,7 @@ class TestValidateSchemaRefExistence:
             def get(self, value):
                 return None
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_schema_ref_existence(
             {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
         )
         assert errors == []
@@ -153,7 +153,7 @@ class TestValidateSchemaRefExistence:
             def get(self, value):
                 return object() if value == "gts.x.test._.leaf.v1~" else None
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_schema_ref_existence(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_schema_ref_existence(
             {"x-gts-ref": X_GTS_REF_SELF},
             selected_type_id="gts.x.test._.leaf.v1~",
         )
@@ -162,7 +162,7 @@ class TestValidateSchemaRefExistence:
 
 class TestValidateInstanceValue:
     def test_non_string_instance_value_error(self):
-        error = XGtsRefValidator()._validate_ref_value(123, "gts.*", "ref", None)
+        error = XGtsRefValidator(inherited_dialect="draft-07")._validate_ref_value(123, "gts.*", "ref", None)
         assert error is not None
         assert "Value must be a string" in error.reason
 
@@ -172,7 +172,7 @@ class TestValidateInstanceValue:
             "type": "object",
             "properties": {"ref": {"x-gts-ref": "/$id"}},
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             {"ref": "gts.x.test._.foo.v1~x.test._.bar.v1"}, schema
         )
         assert errors == []
@@ -185,32 +185,32 @@ class TestValidateInstanceValue:
         }
         leaf = "gts.x.test._.base.v1~x.test._.leaf.v1~"
         assert (
-            XGtsRefValidator().validate_instance(
+            XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
                 {"ref": leaf}, schema, selected_type_id=leaf
             )
             == []
         )
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             {"ref": "gts.x.test._.base.v1~"}, schema, selected_type_id=leaf
         )
         assert len(errors) == 1
         assert "does not match pattern" in errors[0].reason
 
     def test_wildcard_pattern_matches_prefix(self):
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "gts.x.test._.foo.v1~", {"x-gts-ref": "gts.x.test.*"}
         )
         assert errors == []
 
     def test_wildcard_pattern_mismatch(self):
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "gts.x.other._.foo.v1~", {"x-gts-ref": "gts.x.test.*"}
         )
         assert len(errors) == 1
         assert "does not match pattern" in errors[0].reason
 
     def test_exact_pattern_mismatch(self):
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "gts.x.other._.foo.v1~", {"x-gts-ref": "gts.x.test._.foo.v1~"}
         )
         assert len(errors) == 1
@@ -221,7 +221,7 @@ class TestValidateInstanceValue:
             def get(self, value):
                 return None
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_instance(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_instance(
             "gts.x.test._.foo.v1~", {"x-gts-ref": "gts.*"}
         )
         assert len(errors) == 1
@@ -232,7 +232,7 @@ class TestValidateInstanceValue:
             def get(self, value):
                 return object()
 
-        errors = XGtsRefValidator(store=FakeStore()).validate_instance(
+        errors = XGtsRefValidator(store=FakeStore(), inherited_dialect="draft-07").validate_instance(
             "gts.x.test._.foo.v1~", {"x-gts-ref": "gts.*"}
         )
         assert errors == []
@@ -242,7 +242,7 @@ class TestValidateInstanceValue:
             "type": "array",
             "items": {"x-gts-ref": "gts.x.test.*"},
         }
-        errors = XGtsRefValidator().validate_instance(["gts.x.other.v1~"], schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(["gts.x.other.v1~"], schema)
         assert len(errors) == 1
 
     def test_tuple_additional_items_recursion(self):
@@ -254,7 +254,7 @@ class TestValidateInstanceValue:
                 "x-gts-ref": "gts.x.test._.target.v1~",
             },
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             ["tuple-prefix", "gts.x.other._.target.v1~"], schema
         )
         assert len(errors) == 1
@@ -269,7 +269,7 @@ class TestValidateInstanceValue:
                 "x-gts-ref": "gts.x.test._.target.v1~",
             },
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             ["tuple-prefix", "gts.x.other._.target.v1~"], schema
         )
         assert len(errors) == 1
@@ -280,7 +280,7 @@ class TestValidateInstanceValue:
             "type": "object",
             "properties": {"ref": {"x-gts-ref": "gts.x.test.*"}},
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             {"ref": "gts.x.other.v1~"}, schema
         )
         assert len(errors) == 1
@@ -294,7 +294,7 @@ class TestValidateInstanceValue:
             },
         }
 
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             {"child": {"link": "gts.x.other.v1~"}}, schema
         )
 
@@ -308,7 +308,7 @@ class TestValidateInstanceValue:
                 {"x-gts-ref": "gts.x.test._.b.v1~"},
             ]
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "gts.x.test._.c.v1~x.test._.item.v1", schema
         )
         assert any("anyOf: no branch matched" in e.reason for e in errors)
@@ -320,7 +320,7 @@ class TestValidateInstanceValue:
                 {"x-gts-ref": "gts.x.test._.b.v1~"},
             ]
         }
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "gts.x.test._.a.v1~x.test._.item.v1", schema
         )
         assert errors == []
@@ -331,5 +331,5 @@ class TestValidateInstanceValue:
                 {"type": "string", "x-gts-ref": "gts.x.test.*"},
             ]
         }
-        errors = XGtsRefValidator().validate_instance("gts.x.other.v1~", schema)
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance("gts.x.other.v1~", schema)
         assert len(errors) == 1

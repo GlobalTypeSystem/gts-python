@@ -1,16 +1,113 @@
 """Tests for gts.compatibility (spec sec 4, OP#8 & OP#12 inclusion primitive)."""
 
 from gts.compatibility import (
+    CLOSED,
     COMPATIBLE,
     INCOMPATIBLE,
+    OPEN,
+    PARTIAL,
     UNKNOWN,
     boolean_schema_value,
     sanitize,
     check_backward_compatibility,
     check_forward_compatibility,
+    classify_object_levels,
+    explain_verdict,
     full_verdict,
     check_accepted_set_inclusion,
 )
+
+
+class TestObjectLevelClassification:
+    def test_open_when_additional_properties_absent(self):
+        levels = classify_object_levels(
+            {"type": "object", "properties": {"a": {"type": "string"}}}
+        )
+        assert levels == [{"path": "$", "content_model": OPEN}]
+
+    def test_closed_when_additional_properties_false(self):
+        levels = classify_object_levels(
+            {"type": "object", "properties": {}, "additionalProperties": False}
+        )
+        assert levels == [{"path": "$", "content_model": CLOSED}]
+
+    def test_partial_when_additional_properties_is_schema(self):
+        levels = classify_object_levels(
+            {"type": "object", "additionalProperties": {"type": "string"}}
+        )
+        assert levels == [{"path": "$", "content_model": PARTIAL}]
+
+    def test_partial_when_pattern_properties_present(self):
+        levels = classify_object_levels(
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "patternProperties": {"^x-": {"type": "string"}},
+            }
+        )
+        assert levels == [{"path": "$", "content_model": PARTIAL}]
+
+    def test_nested_levels_are_reported(self):
+        levels = classify_object_levels(
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "payload": {"type": "object", "properties": {}},
+                },
+            }
+        )
+        paths = {level["path"]: level["content_model"] for level in levels}
+        assert paths == {"$": CLOSED, "$.payload": OPEN}
+
+    def test_levels_under_applicator_keywords_are_reported(self):
+        levels = classify_object_levels(
+            {
+                "type": "object",
+                "additionalProperties": {"type": "object", "properties": {}},
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "object", "additionalProperties": False},
+                    },
+                    "map": {
+                        "type": "object",
+                        "patternProperties": {
+                            "^x-": {"type": "object", "additionalProperties": False}
+                        },
+                    },
+                },
+            }
+        )
+        paths = {level["path"]: level["content_model"] for level in levels}
+        # Object levels nested under additionalProperties, array items, and
+        # patternProperties are all classified now, not only `properties`.
+        assert paths["$.additionalProperties"] == OPEN
+        assert paths["$.items[]"] == CLOSED
+        assert paths["$.map.patternProperties[^x-]"] == CLOSED
+
+
+class TestExplainVerdict:
+    def test_compatible_direction_has_no_reasons(self):
+        assert explain_verdict(COMPATIBLE, backward=True) == []
+
+    def test_incompatible_backward_explains_relation(self):
+        reasons = explain_verdict(INCOMPATIBLE, backward=True)
+        assert reasons
+        assert "backward incompatible" in reasons[0]
+
+    def test_incompatible_forward_explains_relation(self):
+        reasons = explain_verdict(INCOMPATIBLE, backward=False)
+        assert reasons
+        assert "forward incompatible" in reasons[0]
+
+    def test_unknown_on_differing_dialects(self):
+        reasons = explain_verdict(UNKNOWN, backward=True, differing_dialects=True)
+        assert reasons and "different JSON Schema dialects" in reasons[0]
+
+    def test_unknown_without_dialect_difference(self):
+        reasons = explain_verdict(UNKNOWN, backward=False, differing_dialects=False)
+        assert reasons and "could not be proved or disproved" in reasons[0]
 
 
 class TestBooleanSchemaValue:

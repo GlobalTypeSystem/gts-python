@@ -517,6 +517,7 @@ class TestCastClassmethod:
             {"a": "x"},
             from_schema,
             to_schema,
+            inherited_dialect="draft-07",
         )
         assert result.is_fully_compatible is False
         assert result.incompatibility_reasons
@@ -536,6 +537,7 @@ class TestCastClassmethod:
             {"a": "x"},
             from_schema,
             to_schema,
+            inherited_dialect="draft-07",
         )
         assert result.is_fully_compatible is True
         assert result.casted_entity == {"a": "x"}
@@ -572,5 +574,6 @@ class TestCastClassmethod:
             "not-a-dict",
             {},
             {},
+            inherited_dialect="draft-07",
         )
         assert result.casted_entity == {}

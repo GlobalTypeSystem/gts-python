@@ -92,6 +92,8 @@ class TestGtsStore:
         store = GtsStore(reader)
 
         schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$id": "gts://gts.vendor.package.namespace.type.v1~",
             "type": "object",
             "properties": {"name": {"type": "string"}},
         }
@@ -100,6 +102,33 @@ class TestGtsStore:
         result = store.get("gts.vendor.package.namespace.type.v1~")
         assert result is not None
         assert result.is_schema is True
+
+    def test_store_register_schema_requires_schema_marker(self):
+        """An explicit type ID does not turn an instance document into a schema."""
+        store = GtsStore(MockGtsReader([]))
+
+        with pytest.raises(ValueError, match=r"top-level \$schema"):
+            store.register_schema(
+                "gts.vendor.package.namespace.type.v1~", {"type": "object"}
+            )
+
+    def test_store_register_schema_requires_matching_embedded_id(self):
+        store = GtsStore(MockGtsReader([]))
+        type_id = "gts.vendor.package.namespace.type.v1~"
+
+        with pytest.raises(ValueError, match=r"top-level \$id"):
+            store.register_schema(
+                type_id,
+                {"$schema": "http://json-schema.org/draft-07/schema#"},
+            )
+        with pytest.raises(ValueError, match="must match"):
+            store.register_schema(
+                type_id,
+                {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "$id": "gts://gts.vendor.package.namespace.other.v1~",
+                },
+            )
 
     def test_store_register_schema_invalid_id(self):
         """Test registering schema with invalid ID (not ending with ~)."""
@@ -307,6 +336,7 @@ class TestGtsStoreValidation:
             type_id,
             {
                 "$schema": "http://json-schema.org/draft-07/schema#",
+                "$id": "gts://gts.vendor.package.namespace.type.v1~",
                 "type": "object",
                 "properties": {
                     "uuid": {"type": "string", "format": "uuid"},

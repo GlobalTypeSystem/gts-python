@@ -35,13 +35,16 @@ type: object
 
     entities = list(GtsFileReader(str(source)))
 
-    assert [entity.gts_id.id for entity in entities] == [
+    entities_by_id = {entity.gts_id.id: entity for entity in entities}
+    assert set(entities_by_id) == {
         "gts.acme.catalog._.item.v1~acme.catalog._.one.v1",
         "gts.acme.catalog._.item.v1~",
-    ]
-    assert entities[0].label == "entities.json#0"
-    assert entities[0].file.sequencesCount == 2
-    assert entities[1].file.name == "schema.yaml"
+    }
+    list_entity = entities_by_id["gts.acme.catalog._.item.v1~acme.catalog._.one.v1"]
+    schema_entity = entities_by_id["gts.acme.catalog._.item.v1~"]
+    assert list_entity.label == "entities.json#0"
+    assert list_entity.file.sequencesCount == 2
+    assert schema_entity.file.name == "schema.yaml"
 
 
 def test_reader_accepts_multiple_paths_and_reset_recollects_files(tmp_path):

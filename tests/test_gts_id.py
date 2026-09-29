@@ -89,10 +89,12 @@ class TestGtsID:
         assert gts_id.is_type is True
         assert len(gts_id.gts_id_segments) == 1
 
-    def test_valid_gts_id_with_uri_prefix(self):
-        """Test GTS ID with URI prefix is normalized."""
-        gts_id = GtsID("gts://gts.vendor.package.namespace.type.v1~")
-        assert gts_id.id == "gts.vendor.package.namespace.type.v1~"
+    def test_uri_prefix_rejected_by_core_parser(self):
+        """The core parser accepts only the bare canonical form; the ``gts://``
+        URI form is a $id/$ref serialization detail stripped by URI-specific
+        callers before parsing (mirroring gts-rust/gts-go)."""
+        with pytest.raises(GtsInvalidId):
+            GtsID("gts://gts.vendor.package.namespace.type.v1~")
 
     def test_valid_gts_id_instance(self):
         """Test instance GTS ID (not ending with ~)."""
@@ -193,7 +195,8 @@ class TestGtsID:
     def test_is_valid_static_method(self):
         """Test static is_valid method."""
         assert GtsID.is_valid("gts.vendor.package.namespace.type.v1~") is True
-        assert GtsID.is_valid("gts://gts.vendor.package.namespace.type.v1~") is True
+        # The URI form is not a canonical id; callers strip the scheme first.
+        assert GtsID.is_valid("gts://gts.vendor.package.namespace.type.v1~") is False
         assert GtsID.is_valid("invalid") is False
         assert GtsID.is_valid("") is False
 

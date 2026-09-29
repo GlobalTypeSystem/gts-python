@@ -23,7 +23,7 @@ from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
-from .schema_validation import map_schema_nodes, validator_for
+from .schema_validation import check_schema, map_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator
 
 X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
@@ -41,11 +41,13 @@ class EffectiveTraits:
         values: Any,
         resolved_trait_schemas: list[Any],
         merged_traits: dict[str, Any],
+        dialect: str | None,
     ) -> None:
         self.schema = schema
         self.values = values
         self.resolved_trait_schemas = resolved_trait_schemas
         self.merged_traits = merged_traits
+        self.dialect = dialect
 
     def _has_schema(self) -> bool:
         return len(self.resolved_trait_schemas) > 0
@@ -61,7 +63,9 @@ class EffectiveTraits:
         selected_type_id: str | None = None,
     ) -> list[str]:
         """Return a list of error strings (empty means valid)."""
-        errors = _validate_trait_schema_integrity(self.resolved_trait_schemas)
+        errors = _validate_trait_schema_integrity(
+            self.resolved_trait_schemas, self.dialect
+        )
         if errors:
             return errors
         errors = _validate_trait_schema_compatibility(self.resolved_trait_schemas)
@@ -94,6 +98,7 @@ class EffectiveTraits:
             reference_store,
             gts_ref_validation,
             selected_type_id,
+            self.dialect,
         )
 
 
@@ -191,6 +196,7 @@ def build_effective_traits(
         values=values,
         resolved_trait_schemas=list(resolved_trait_schemas),
         merged_traits=copy.deepcopy(merged_traits),
+        dialect=dialect,
     )
 
 
@@ -298,14 +304,18 @@ def _without_required(schema: Any) -> Any:
     return map_schema_nodes(copy.deepcopy(schema), strip)
 
 
-def _validate_trait_schema_integrity(resolved_trait_schemas: list[Any]) -> list[str]:
+def _validate_trait_schema_integrity(
+    resolved_trait_schemas: list[Any], dialect: str | None
+) -> list[str]:
     for i, ts in enumerate(resolved_trait_schemas):
         if isinstance(ts, bool):
             continue
         if isinstance(ts, dict):
+            schema = copy.deepcopy(ts)
+            if dialect:
+                schema["$schema"] = dialect
             try:
-                cls = validator_for(ts)
-                cls.check_schema(ts)
+                check_schema(schema)
             except Exception as e:  # noqa: BLE001 - surfaced as validation error message
                 return [f"{X_GTS_TRAITS_SCHEMA}[{i}] is not a valid JSON Schema: {e}"]
         else:
@@ -349,12 +359,15 @@ def _validate_trait_schema_compatibility(
 
 
 def _validate_traits_against_schema(
-    trait_schema: Any, effective_traits: Any, check_unresolved: bool
+    trait_schema: Any,
+    effective_traits: Any,
+    check_unresolved: bool,
+    inherited_dialect: str | None,
 ) -> list[str]:
     errors: list[str] = []
 
     try:
-        cls = validator_for(trait_schema)
+        cls = validator_for(trait_schema, inherited_dialect=inherited_dialect)
         validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
@@ -394,6 +407,7 @@ def _validate_trait_values(
     reference_store: Any | None,
     gts_ref_validation: GtsRefValidationMode,
     selected_type_id: str | None,
+    inherited_dialect: str | None,
 ) -> list[str]:
     schema_for_values = (
         effective_traits_schema
@@ -401,9 +415,13 @@ def _validate_trait_values(
         else _without_required(effective_traits_schema)
     )
     errors = _validate_traits_against_schema(
-        schema_for_values, effective_traits, check_unresolved
+        schema_for_values, effective_traits, check_unresolved, inherited_dialect
     )
-    xref = XGtsRefValidator(store=reference_store, mode=gts_ref_validation)
+    xref = XGtsRefValidator(
+        store=reference_store,
+        mode=gts_ref_validation,
+        inherited_dialect=inherited_dialect,
+    )
     for err in xref.validate_schema_ref_existence(
         effective_traits_schema, selected_type_id=selected_type_id
     ):

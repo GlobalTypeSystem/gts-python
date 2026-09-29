@@ -1,18 +1,21 @@
 """Additional coverage-focused tests for gts.store.GtsStore."""
 
+import threading
 from collections.abc import Iterator
 from typing import Optional
 
 import pytest
 from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
 from gts.gts import GtsID
-from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
+from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, check_schema, validator_for
 from gts.store import (
+    MAX_SCHEMA_REF_EXPANSIONS,
     GtsReader,
     GtsStore,
     StoreGtsEntityNotFound,
     StoreGtsObjectNotFound,
 )
+from jsonschema import SchemaError, ValidationError
 
 
 class MockGtsReader(GtsReader):
@@ -55,12 +58,39 @@ def _schema_entity(gts_id: str, content_extra=None):
 
 
 class TestBoundedPatternValidation:
+    def test_schema_check_uses_ecma_compatible_regex_format(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "pattern": r"^\p{Lu}(?=\p{Ll})",
+        }
+        check_schema(schema)
+
+    def test_schema_check_rejects_invalid_regex(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "pattern": "[",
+        }
+        with pytest.raises(SchemaError):
+            check_schema(schema)
+
     def test_catastrophic_pattern_times_out(self):
-        validator = validator_for({"pattern": "(a+)+$"})({"pattern": "(a+)+$"})
+        validator = validator_for({"pattern": "(a+)+$"}, inherited_dialect="draft-07")({"pattern": "(a+)+$"})
         errors = list(validator.iter_errors("a" * 30_000 + "!"))
         assert len(errors) == 1
         assert errors[0].message == "regular expression match timed out"
-        assert PATTERN_TIMEOUT_SECONDS == 1.0
+        assert PATTERN_TIMEOUT_SECONDS == 0.25
+
+    def test_catastrophic_pattern_properties_key_times_out(self):
+        # patternProperties matches property NAMES; an adversarially long key
+        # against a catastrophic pattern must be bounded by the same timeout as
+        # the `pattern` keyword rather than backtracking indefinitely.
+        schema = {"patternProperties": {"(a+)+$": {"type": "string"}}}
+        validator = validator_for(schema, inherited_dialect="draft-07")(schema)
+        instance = {"a" * 30_000 + "!": "value"}
+        errors = list(validator.iter_errors(instance))
+        assert any(
+            error.message == "regular expression match timed out" for error in errors
+        )
 
 
 class TestRegisterEdgeCases:
@@ -86,6 +116,74 @@ class TestRegisterEdgeCases:
     def test_unregister_missing_id_noop(self):
         store = GtsStore(reader=None)
         store.unregister("gts.x.test._.missing.v1~")  # should not raise
+
+    def test_store_uses_defensive_copies(self):
+        store = GtsStore(reader=None)
+        entity = _schema_entity("gts.x.test._.copy.v1~")
+        store.register(entity)
+        entity.content["type"] = "array"
+        first = store.get("gts.x.test._.copy.v1~")
+        assert first.content["type"] == "object"
+        first.content["type"] = "number"
+        items = dict(store.items())
+        items["gts.x.test._.copy.v1~"].content["type"] = "boolean"
+        assert store.get("gts.x.test._.copy.v1~").content["type"] == "object"
+
+    def test_reference_registry_is_cached_and_invalidated_by_schema_changes(self):
+        store = GtsStore(reader=None)
+        store.register(_schema_entity("gts.x.test._.cached.v1~"))
+        first = store._create_reference_registry()
+        second = store._create_reference_registry()
+        assert first is second
+
+        instance = GtsEntity(
+            content={"id": "gts.x.test._.cached.v1~x.test._.i.v1.0"},
+            gts_id=GtsID("gts.x.test._.cached.v1~x.test._.i.v1.0"),
+        )
+        store.register(instance)
+        assert store._create_reference_registry() is first
+
+        store.register(_schema_entity("gts.x.test._.cached2.v1~"))
+        assert store._create_reference_registry() is not first
+
+    def test_transaction_serializes_writers(self):
+        store = GtsStore(reader=None)
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+
+        def first_writer():
+            with store.transaction():
+                entered.set()
+                release.wait()
+
+        def second_writer():
+            entered.wait()
+            store.register(_schema_entity("gts.x.test._.serialized.v1~"))
+            completed.set()
+
+        first = threading.Thread(target=first_writer)
+        second = threading.Thread(target=second_writer)
+        first.start()
+        second.start()
+        assert not completed.wait(0.05)
+        release.set()
+        first.join()
+        second.join()
+        assert completed.is_set()
+
+    def test_reference_expansion_budget(self):
+        store = GtsStore(reader=None)
+        target_id = "gts.x.test._.budget.v1~"
+        store.register(_schema_entity(target_id))
+        schema = {
+            "allOf": [
+                {"$ref": f"gts://{target_id}"}
+                for _ in range(MAX_SCHEMA_REF_EXPANSIONS + 1)
+            ]
+        }
+        with pytest.raises(ValueError, match="expansion exceeds limit"):
+            store._resolve_schema_refs(schema, "draft-07")
 
 
 class TestValidateSchemaRefs:
@@ -285,6 +383,177 @@ class TestValidateSchemaChain:
         with pytest.raises(ValueError, match="not found for chain validation"):
             store._validate_schema_chain("gts.x.test._.base.v1~x.test._.derived.v1~")
 
+    @pytest.mark.parametrize(
+        "dialect",
+        [
+            "http://json-schema.org/draft-06/schema#",
+            "https://json-schema.org/draft/2025-01/schema",
+            "https://example.invalid/not-a-json-schema-dialect",
+            "https://json-schema.org/draft/2020-21/schema",
+        ],
+    )
+    def test_unsupported_schema_dialect_raises(self, dialect):
+        with pytest.raises(ValueError, match="Unsupported JSON Schema dialect"):
+            GtsStore._schema_dialect({"$schema": dialect})
+
+    def test_missing_schema_dialect_raises(self):
+        """A document without $schema is not eligible for schema validation."""
+        with pytest.raises(ValueError, match=r"\$schema must declare"):
+            GtsStore._schema_dialect({})
+
+    def test_draft7_alias_uses_draft7_validator(self):
+        """Canonicalize accepted aliases before schema and instance validation."""
+        schema_id = "gts.x.test._.draft7_alias.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft-07/schema#",
+                "required": ["pair"],
+                "properties": {
+                    "pair": {
+                        "type": "array",
+                        "items": [{"type": "string"}, {"type": "integer"}],
+                        "additionalItems": False,
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        store.validate_schema(schema_id)
+        store.validate_instance_content({"pair": ["ok", 1]}, schema_id)
+        with pytest.raises(ValidationError):
+            store.validate_instance_content({"pair": ["ok", "wrong"]}, schema_id)
+
+    def test_local_ref_dialect_mismatch_raises(self):
+        schema = _schema_entity(
+            "gts.x.test._.embedded.v1~",
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "properties": {"legacy": {"$ref": "#/$defs/legacy"}},
+                "$defs": {
+                    "legacy": {
+                        "$id": "legacy",
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "string",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        with pytest.raises(ValueError, match=r"local \$ref target"):
+            store._validate_schema_chain(schema.gts_id.id)
+
+    def test_mixed_dialect_chain_raises(self):
+        base = _schema_entity("gts.x.test._.base.v1~")
+        derived = _schema_entity(
+            "gts.x.test._.base.v1~x.test._.derived.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        store = GtsStore(reader=None)
+        store.register(base)
+        store.register(derived)
+
+        with pytest.raises(ValueError, match="mixes JSON Schema dialects"):
+            store._validate_schema_chain("gts.x.test._.base.v1~x.test._.derived.v1~")
+
+    def test_transitive_ref_dialect_mismatch_raises(self):
+        foreign = _schema_entity(
+            "gts.x.test._.foreign.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        middle = _schema_entity(
+            "gts.x.test._.middle.v1~",
+            {"allOf": [{"$ref": "gts://gts.x.test._.foreign.v1~"}]},
+        )
+        host = _schema_entity(
+            "gts.x.test._.host.v1~",
+            {"allOf": [{"$ref": "gts://gts.x.test._.middle.v1~"}]},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(middle)
+        store.register(host)
+
+        with pytest.raises(ValueError, match="gts.x.test._.foreign.v1~"):
+            store._validate_schema_chain("gts.x.test._.host.v1~")
+
+    def test_ancestor_ref_dialect_mismatch_raises(self):
+        # Issue C: the cross-dialect $ref lives on an ancestor; the descendant
+        # derives by re-declaration and references neither the ancestor nor the
+        # 2020-12 target. A leaf-only reference walk would accept it; walking the
+        # whole chain closure must reject it (OP#12 path).
+        foreign = _schema_entity(
+            "gts.x.test._.ancforeign.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        base = _schema_entity(
+            "gts.x.test._.ancbase.v1~",
+            {"properties": {"ext": {"$ref": "gts://gts.x.test._.ancforeign.v1~"}}},
+        )
+        child = _schema_entity(
+            "gts.x.test._.ancbase.v1~x.test._.ancchild.v1~",
+            {"properties": {"label": {"type": "string"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(base)
+        store.register(child)
+
+        with pytest.raises(ValueError, match="gts.x.test._.ancforeign.v1~"):
+            store._validate_schema_chain(
+                "gts.x.test._.ancbase.v1~x.test._.ancchild.v1~"
+            )
+
+    def test_instance_content_rejects_ancestor_cross_dialect_ref(self):
+        # Issue C on the OP#6 instance path: validating an instance of the
+        # descendant must reject it because an ancestor references a schema of a
+        # different dialect.
+        foreign = _schema_entity(
+            "gts.x.test._.ancforeign2.v1~",
+            {"$schema": "https://json-schema.org/draft/2020-12/schema"},
+        )
+        base = _schema_entity(
+            "gts.x.test._.ancbase2.v1~",
+            {"properties": {"ext": {"$ref": "gts://gts.x.test._.ancforeign2.v1~"}}},
+        )
+        child = _schema_entity(
+            "gts.x.test._.ancbase2.v1~x.test._.ancchild2.v1~",
+            {"properties": {"label": {"type": "string"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(foreign)
+        store.register(base)
+        store.register(child)
+
+        with pytest.raises(ValueError, match="gts.x.test._.ancforeign2.v1~"):
+            store.validate_instance_content(
+                {"label": "ok"},
+                "gts.x.test._.ancbase2.v1~x.test._.ancchild2.v1~",
+            )
+
+    def test_trait_resource_dialect_mismatch_raises(self):
+        schema_id = "gts.x.test._.trait_resource.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "x-gts-traits-schema": {
+                    "$id": "https://example.com/gts/legacy-traits",
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "type": "object",
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+
+        with pytest.raises(ValueError, match="differs from host dialect"):
+            store.validate_schema(schema_id)
+
     def test_incompatible_derivation_raises(self):
         base = _schema_entity(
             "gts.x.test._.base.v1~",
@@ -307,13 +576,13 @@ class TestResolveSchemaRefsAndInline:
         store = GtsStore(reader=None)
         store.register(target)
         schema = {"$ref": "gts://gts.x.test._.target.v1~"}
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "draft-07")
         assert resolved["type"] == "object"
 
     def test_unresolvable_ref_left_unresolved(self):
         store = GtsStore(reader=None)
         schema = {"$ref": "gts://gts.x.test._.missing.v1~"}
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "draft-07")
         assert resolved == schema
 
     def test_cyclic_ref_left_unresolved(self):
@@ -334,11 +603,12 @@ class TestResolveSchemaRefsAndInline:
             "$ref": "gts://gts.x.test._.target.v1~",
             "title": "sibling",
         }
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "2020-12")
         assert "allOf" in resolved
 
-    def test_supports_ref_siblings_false_for_non_dict(self):
-        assert GtsStore._supports_ref_siblings("nope") is False
+    def test_supports_ref_siblings_rejects_non_schema(self):
+        with pytest.raises(TypeError, match="schema must be a JSON object"):
+            GtsStore._supports_ref_siblings("nope")
 
     def test_inline_refs_list_recursion(self):
         store = GtsStore(reader=None)
@@ -554,3 +824,71 @@ class TestValidateSchemaFullFlow:
         store = GtsStore(reader=None)
         with pytest.raises(StoreGtsObjectNotFound):
             store.validate_instance("totally-not-valid")
+
+
+class TestSubschemaDialect:
+    def test_nested_schema_switching_dialect_is_rejected(self):
+        schema_id = "gts.x.test._.nested_dialect.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "properties": {
+                    "inner": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        with pytest.raises(ValueError, match="must not change JSON Schema dialect"):
+            store.validate_schema(schema_id)
+
+    def test_nested_schema_restating_dialect_is_allowed(self):
+        schema_id = "gts.x.test._.nested_same_dialect.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "properties": {
+                    "inner": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                    }
+                },
+            },
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        store.validate_schema(schema_id)  # must not raise
+
+
+class TestExceptionHierarchy:
+    def test_not_found_errors_share_a_base(self):
+        from gts import GtsError, GtsNotFoundError
+        from gts.store import StoreGtsObjectNotFound, StoreGtsSchemaNotFound
+
+        assert issubclass(StoreGtsObjectNotFound, GtsNotFoundError)
+        assert issubclass(StoreGtsSchemaNotFound, GtsNotFoundError)
+        assert issubclass(GtsNotFoundError, GtsError)
+
+    def test_validation_error_is_value_error(self):
+        from gts import GtsError, GtsValidationError
+
+        assert issubclass(GtsValidationError, ValueError)
+        assert issubclass(GtsValidationError, GtsError)
+
+    def test_unresolvable_ref_is_catchable_as_gts_error(self):
+        from gts import GtsError
+
+        schema_id = "gts.x.test._.dangling_ref.v1~"
+        schema = _schema_entity(
+            schema_id,
+            {"properties": {"other": {"$ref": "gts://gts.x.test._.missing.v1~"}}},
+        )
+        store = GtsStore(reader=None)
+        store.register(schema)
+        with pytest.raises(GtsError, match="Unresolvable \\$ref"):
+            store.validate_schema(schema_id)
