@@ -7,7 +7,7 @@ from typing import Optional
 import pytest
 from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
 from gts.gts import GtsID
-from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, validator_for
+from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, check_schema, validator_for
 from gts.store import (
     MAX_SCHEMA_REF_EXPANSIONS,
     GtsReader,
@@ -15,7 +15,7 @@ from gts.store import (
     StoreGtsEntityNotFound,
     StoreGtsObjectNotFound,
 )
-from jsonschema import ValidationError
+from jsonschema import SchemaError, ValidationError
 
 
 class MockGtsReader(GtsReader):
@@ -58,19 +58,34 @@ def _schema_entity(gts_id: str, content_extra=None):
 
 
 class TestBoundedPatternValidation:
+    def test_schema_check_uses_ecma_compatible_regex_format(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "pattern": r"^\p{Lu}(?=\p{Ll})",
+        }
+        check_schema(schema)
+
+    def test_schema_check_rejects_invalid_regex(self):
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "pattern": "[",
+        }
+        with pytest.raises(SchemaError):
+            check_schema(schema)
+
     def test_catastrophic_pattern_times_out(self):
-        validator = validator_for({"pattern": "(a+)+$"})({"pattern": "(a+)+$"})
+        validator = validator_for({"pattern": "(a+)+$"}, inherited_dialect="draft-07")({"pattern": "(a+)+$"})
         errors = list(validator.iter_errors("a" * 30_000 + "!"))
         assert len(errors) == 1
         assert errors[0].message == "regular expression match timed out"
-        assert PATTERN_TIMEOUT_SECONDS == 1.0
+        assert PATTERN_TIMEOUT_SECONDS == 0.25
 
     def test_catastrophic_pattern_properties_key_times_out(self):
         # patternProperties matches property NAMES; an adversarially long key
         # against a catastrophic pattern must be bounded by the same timeout as
         # the `pattern` keyword rather than backtracking indefinitely.
         schema = {"patternProperties": {"(a+)+$": {"type": "string"}}}
-        validator = validator_for(schema)(schema)
+        validator = validator_for(schema, inherited_dialect="draft-07")(schema)
         instance = {"a" * 30_000 + "!": "value"}
         errors = list(validator.iter_errors(instance))
         assert any(
@@ -168,7 +183,7 @@ class TestRegisterEdgeCases:
             ]
         }
         with pytest.raises(ValueError, match="expansion exceeds limit"):
-            store._resolve_schema_refs(schema)
+            store._resolve_schema_refs(schema, "draft-07")
 
 
 class TestValidateSchemaRefs:
@@ -371,6 +386,8 @@ class TestValidateSchemaChain:
     @pytest.mark.parametrize(
         "dialect",
         [
+            "http://json-schema.org/draft-06/schema#",
+            "https://json-schema.org/draft/2025-01/schema",
             "https://example.invalid/not-a-json-schema-dialect",
             "https://json-schema.org/draft/2020-21/schema",
         ],
@@ -559,13 +576,13 @@ class TestResolveSchemaRefsAndInline:
         store = GtsStore(reader=None)
         store.register(target)
         schema = {"$ref": "gts://gts.x.test._.target.v1~"}
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "draft-07")
         assert resolved["type"] == "object"
 
     def test_unresolvable_ref_left_unresolved(self):
         store = GtsStore(reader=None)
         schema = {"$ref": "gts://gts.x.test._.missing.v1~"}
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "draft-07")
         assert resolved == schema
 
     def test_cyclic_ref_left_unresolved(self):
@@ -586,11 +603,12 @@ class TestResolveSchemaRefsAndInline:
             "$ref": "gts://gts.x.test._.target.v1~",
             "title": "sibling",
         }
-        resolved = store._resolve_schema_refs(schema)
+        resolved = store._resolve_schema_refs(schema, "2020-12")
         assert "allOf" in resolved
 
-    def test_supports_ref_siblings_false_for_non_dict(self):
-        assert GtsStore._supports_ref_siblings("nope") is False
+    def test_supports_ref_siblings_rejects_non_schema(self):
+        with pytest.raises(TypeError, match="schema must be a JSON object"):
+            GtsStore._supports_ref_siblings("nope")
 
     def test_inline_refs_list_recursion(self):
         store = GtsStore(reader=None)

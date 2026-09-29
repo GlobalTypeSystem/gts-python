@@ -25,7 +25,7 @@ def _schema_entity(gts_id, content):
 
 class TestXGtsRefCombinators:
     def test_plain_one_of_is_left_to_jsonschema(self):
-        errors = XGtsRefValidator().validate_instance(
+        errors = XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
             "value", {"oneOf": [{"type": "string"}, {"type": "integer"}]}
         )
 
@@ -42,16 +42,16 @@ class TestXGtsRefCombinators:
         valid = "gts.x.test._.first.v1~x.test._.item.v1"
         invalid = "gts.x.test._.other.v1~x.test._.item.v1"
 
-        assert XGtsRefValidator().validate_instance(valid, schema) == []
+        assert XGtsRefValidator(inherited_dialect="draft-07").validate_instance(valid, schema) == []
         assert [
             error.reason
-            for error in XGtsRefValidator().validate_instance(invalid, schema)
+            for error in XGtsRefValidator(inherited_dialect="draft-07").validate_instance(invalid, schema)
         ] == ["oneOf: no branch matched"]
 
 
 class TestReferenceResolution:
     def test_boolean_schema_does_not_require_reference_resolution(self):
-        assert GtsStore(reader=None)._resolve_schema_refs(True) is True
+        assert GtsStore(reader=None)._resolve_schema_refs(True, "draft-07") is True
 
     def test_modern_ref_siblings_are_preserved_during_instance_validation(self):
         store = GtsStore(reader=None)
@@ -103,7 +103,7 @@ class TestTraits:
                 {"properties": {"value": {"default": None}}},
             ],
             {},
-            None,
+            "http://json-schema.org/draft-07/schema#",
         )
 
         assert effective.values == {"value": None}

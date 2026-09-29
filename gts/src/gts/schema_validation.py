@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Iterator
+from functools import cache
 from typing import Any
 
 import regex
-from jsonschema import Draft7Validator, FormatChecker, ValidationError, validators
-from jsonschema.validators import validator_for as jsonschema_validator_for
+from jsonschema import (
+    Draft7Validator,
+    Draft201909Validator,
+    Draft202012Validator,
+    FormatChecker,
+    ValidationError,
+    validators,
+)
 
-PATTERN_TIMEOUT_SECONDS = 1.0
+from . import schema_dialect
+
+PATTERN_TIMEOUT_SECONDS = 0.25
 
 _SCHEMA_MAP_KEYWORDS = {
     "$defs",
@@ -121,10 +130,19 @@ def map_schema_nodes(schema: Any, transform: Callable[[Any], Any]) -> Any:
 #
 # Starting from the bare checker (which provides "uuid") and overlaying the
 # draft-07 checkers (which restore correct RFC 3339 "time"/"date-time") yields
-# the complete, correct standard-format set. This uses only built-in jsonschema
-# checkers -- no custom format functions.
+# the complete standard-format set. The regex checker is replaced below with
+# the ECMA-compatible engine used by pattern validation.
 FORMAT_CHECKER = FormatChecker()
 FORMAT_CHECKER.checkers.update(Draft7Validator.FORMAT_CHECKER.checkers)
+
+
+def _is_ecma_regex(value: object) -> bool:
+    if isinstance(value, str):
+        regex.compile(value)
+    return True
+
+
+FORMAT_CHECKER.checks("regex", raises=regex.error)(_is_ecma_regex)
 
 
 def _validate_pattern(
@@ -167,11 +185,27 @@ def _validate_pattern_properties(
                 )
 
 
-def validator_for(schema: Any) -> Any:
+@cache
+def _bounded_pattern_validator(base: Any) -> Any:
     return validators.extend(
-        jsonschema_validator_for(schema),
+        base,
         {
             "pattern": _validate_pattern,
             "patternProperties": _validate_pattern_properties,
         },
+        format_checker=FORMAT_CHECKER,
     )
+
+
+def validator_for(schema: Any, *, inherited_dialect: str | None = None) -> Any:
+    dialect = schema_dialect.effective_dialect(schema, inherited_dialect)
+    base = {
+        "draft-07": Draft7Validator,
+        "2019-09": Draft201909Validator,
+        "2020-12": Draft202012Validator,
+    }[dialect]
+    return _bounded_pattern_validator(base)
+
+
+def check_schema(schema: Any, dialect: Any = None) -> None:
+    validator_for(dialect or schema).check_schema(schema, format_checker=FORMAT_CHECKER)

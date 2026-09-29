@@ -23,6 +23,21 @@ _DIALECT_URI = {
     "2019-09": "https://json-schema.org/draft/2019-09/schema",
     "2020-12": "https://json-schema.org/draft/2020-12/schema",
 }
+SUPPORTED_DIALECTS = frozenset(_DIALECT_URI)
+
+
+def require_dialect(dialect: str | None) -> str:
+    if dialect not in SUPPORTED_DIALECTS:
+        raise ValueError(f"Unsupported JSON Schema dialect: {dialect}")
+    return dialect
+
+
+def effective_dialect(schema: Any, inherited_dialect: str | None = None) -> str:
+    if isinstance(schema, dict) and "$schema" in schema:
+        return document_dialect(schema)
+    if inherited_dialect is None:
+        raise ValueError("schema fragments require an explicit inherited dialect")
+    return require_dialect(inherited_dialect)
 
 
 def document_dialect(schema: dict[str, Any]) -> str:
@@ -54,10 +69,9 @@ def supports_ref_siblings(schema: Any) -> bool:
 
     Draft 2019-09 and 2020-12 do; Draft-07 ignores ``$ref`` siblings.
     """
-    dialect = schema.get("$schema") if isinstance(schema, dict) else None
-    return isinstance(dialect, str) and (
-        "/draft/2019-09/" in dialect or "/draft/2020-12/" in dialect
-    )
+    if not isinstance(schema, dict):
+        raise TypeError("schema must be a JSON object with a supported $schema dialect")
+    return document_dialect(schema) != "draft-07"
 
 
 def check_subschemas(schema: dict[str, Any]) -> None:

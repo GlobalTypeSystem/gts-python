@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .gts import GtsRef
-from .schema_dialect import supports_ref_siblings
+from .schema_dialect import require_dialect, supports_ref_siblings
 
 # A ``$ref`` provider maps a bare GTS id to its schema content, raising
 # ``KeyError`` when the id is unknown.
@@ -27,10 +27,15 @@ SchemaProvider = Callable[[str], dict]
 MAX_SCHEMA_REF_EXPANSIONS = 10_000
 
 
-def resolve_schema_refs(schema: Any, provider: SchemaProvider) -> Any:
+def resolve_schema_refs(schema: Any, provider: SchemaProvider, dialect: str) -> Any:
     """Return ``schema`` with external ``$ref`` targets inlined via ``provider``."""
+    effective_dialect = require_dialect(dialect)
     return inline_refs(
-        copy.deepcopy(schema), set(), supports_ref_siblings(schema), provider, [0]
+        copy.deepcopy(schema),
+        set(),
+        effective_dialect != "draft-07",
+        provider,
+        [0],
     )
 
 

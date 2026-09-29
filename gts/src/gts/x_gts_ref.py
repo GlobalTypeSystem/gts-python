@@ -15,13 +15,14 @@ from __future__ import annotations
 from typing import Any
 
 from jsonschema.exceptions import ValidationError
-from jsonschema.validators import extend, validator_for
+from jsonschema.validators import extend
 
 from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import GTS_PREFIX, strip_scheme
 from .gts import GtsID, GtsWildcard
 from .gts_ref_validation import GtsRefValidationMode
-from .schema_validation import iter_schema_nodes, map_schema_nodes
+from .schema_dialect import effective_dialect
+from .schema_validation import iter_schema_nodes, map_schema_nodes, validator_for
 
 X_GTS_REF_SELF = "/$id"
 
@@ -143,9 +144,11 @@ def _is_x_gts_ref_only_combinator(branches: list[Any]) -> bool:
     return True
 
 
-def _is_structurally_valid(instance: Any, schema: Any) -> bool:
+def _is_structurally_valid(instance: Any, schema: Any, dialect: str) -> bool:
     try:
-        validator = validator_for(schema)(_without_x_gts_ref(schema))
+        validator = validator_for(schema, inherited_dialect=dialect)(
+            _without_x_gts_ref(schema)
+        )
         return validator.is_valid(instance)
     except Exception:  # noqa: BLE001 - treat any validation error as "not valid"
         return False
@@ -173,6 +176,7 @@ class XGtsRefValidator:
         mode: GtsRefValidationMode | bool | str = GtsRefValidationMode.ANY_VALID,
         *,
         enforce_existence: bool | None = None,
+        inherited_dialect: str | None = None,
     ):
         if enforce_existence is not None:
             mode = (
@@ -186,6 +190,7 @@ class XGtsRefValidator:
             )
         self.store = store
         self.mode = GtsRefValidationMode(mode)
+        self.inherited_dialect = inherited_dialect
         self.referenced_ids: set[str] = set()
         self.referenced_wildcard_patterns: set[str] = set()
 
@@ -219,6 +224,7 @@ class XGtsRefValidator:
             List of validation errors (empty if valid)
         """
         errors: list[XGtsRefValidationError] = []
+        dialect = effective_dialect(schema, self.inherited_dialect)
         selected_type_id = self.selected_type_id(schema, selected_type_id)
 
         def resolve_local_ref(ref: str) -> Any | None:
@@ -271,7 +277,7 @@ class XGtsRefValidator:
                     matching_branches = [
                         branch
                         for branch in one_of
-                        if _is_structurally_valid(inst, branch)
+                        if _is_structurally_valid(inst, branch, dialect)
                     ]
                     if len(matching_branches) == 1:
                         errs.extend(_validate_branch(inst, matching_branches[0], path))
@@ -292,7 +298,7 @@ class XGtsRefValidator:
                     matching_branches = [
                         branch
                         for branch in any_of
-                        if _is_structurally_valid(inst, branch)
+                        if _is_structurally_valid(inst, branch, dialect)
                     ]
                     branch_errors = [
                         _validate_branch(inst, branch, path)
@@ -310,7 +316,7 @@ class XGtsRefValidator:
             all_of = sch.get("allOf")
             if isinstance(all_of, list):
                 for branch in all_of:
-                    if _is_structurally_valid(inst, branch):
+                    if _is_structurally_valid(inst, branch, dialect):
                         errs.extend(_validate_branch(inst, branch, path))
 
             properties = sch.get("properties")

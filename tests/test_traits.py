@@ -11,6 +11,8 @@ from gts.traits import (
     merge_rfc7396_into,
 )
 
+DRAFT7 = "http://json-schema.org/draft-07/schema#"
+
 
 class TestSchemaTraversal:
     def test_maps_draft3_schema_forms_only(self):
@@ -161,26 +163,26 @@ class TestBuildEffectiveTraitsSchema:
 
 class TestBuildEffectiveTraits:
     def test_no_schema_no_values(self):
-        effective = build_effective_traits([], {}, None)
+        effective = build_effective_traits([], {}, DRAFT7)
         assert effective.validate(check_unresolved=True) == []
 
     def test_values_without_schema_is_error(self):
-        effective = build_effective_traits([], {"a": 1}, None)
+        effective = build_effective_traits([], {"a": 1}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any("no x-gts-traits-schema is defined" in e for e in errors)
 
     def test_schema_false_prohibits_values(self):
-        effective = build_effective_traits([False], {"a": 1}, None)
+        effective = build_effective_traits([False], {"a": 1}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any("values are prohibited" in e for e in errors)
 
     def test_schema_false_with_no_values_is_ok(self):
-        effective = build_effective_traits([False], {}, None)
+        effective = build_effective_traits([False], {}, DRAFT7)
         assert effective.validate(check_unresolved=True) == []
 
     def test_default_materialized(self):
         effective = build_effective_traits(
-            [{"type": "object", "properties": {"a": {"default": "x"}}}], {}, None
+            [{"type": "object", "properties": {"a": {"default": "x"}}}], {}, DRAFT7
         )
         assert effective.values == {"a": "x"}
 
@@ -190,7 +192,7 @@ class TestBuildEffectiveTraits:
             "properties": {"a": {"type": "string"}},
             "required": ["a"],
         }
-        effective = build_effective_traits([schema], {"a": "hi"}, None)
+        effective = build_effective_traits([schema], {"a": "hi"}, DRAFT7)
         assert effective.validate(check_unresolved=True) == []
 
     def test_standard_trait_formats_are_enforced(self):
@@ -204,12 +206,12 @@ class TestBuildEffectiveTraits:
 
         assert (
             build_effective_traits(
-                [schema], {"email": "user@example.com", "time": "10:30:00Z"}, None
+                [schema], {"email": "user@example.com", "time": "10:30:00Z"}, DRAFT7
             ).validate(check_unresolved=True)
             == []
         )
         errors = build_effective_traits(
-            [schema], {"email": "not-an-email", "time": "10:30:00Z"}, None
+            [schema], {"email": "not-an-email", "time": "10:30:00Z"}, DRAFT7
         ).validate(check_unresolved=True)
         assert any("is not a 'email'" in error for error in errors)
 
@@ -218,7 +220,7 @@ class TestBuildEffectiveTraits:
             "type": "object",
             "properties": {"a": {"type": "string"}},
         }
-        effective = build_effective_traits([schema], {"a": 5}, None)
+        effective = build_effective_traits([schema], {"a": 5}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any("trait validation" in e for e in errors)
 
@@ -228,7 +230,7 @@ class TestBuildEffectiveTraits:
             "properties": {"a": {"type": "string"}},
             "required": ["a"],
         }
-        effective = build_effective_traits([schema], {}, None)
+        effective = build_effective_traits([schema], {}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any("is not resolved" in e for e in errors)
 
@@ -238,7 +240,7 @@ class TestBuildEffectiveTraits:
             "properties": {"a": {"type": "string"}},
             "required": ["a"],
         }
-        effective = build_effective_traits([schema], {}, None)
+        effective = build_effective_traits([schema], {}, DRAFT7)
         errors = effective.validate(check_unresolved=False)
         assert errors == []
 
@@ -247,7 +249,7 @@ class TestBuildEffectiveTraits:
             "type": "object",
             "properties": {"a": {"type": "string"}},
         }
-        effective = build_effective_traits([schema], {"a": 5}, None)
+        effective = build_effective_traits([schema], {"a": 5}, DRAFT7)
         errors = effective.validate(check_unresolved=False)
         assert any("is not of type 'string'" in error for error in errors)
 
@@ -258,7 +260,7 @@ class TestBuildEffectiveTraits:
             "required": ["missing"],
         }
         effective = build_effective_traits(
-            [schema], {"config": {"required": ["a"]}}, None
+            [schema], {"config": {"required": ["a"]}}, DRAFT7
         )
         assert effective.validate(check_unresolved=False) == []
 
@@ -273,7 +275,7 @@ class TestBuildEffectiveTraits:
                 }
             ],
         }
-        effective = build_effective_traits([schema], {}, None)
+        effective = build_effective_traits([schema], {}, DRAFT7)
         assert effective.validate(check_unresolved=False) == []
 
     def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
@@ -287,7 +289,7 @@ class TestBuildEffectiveTraits:
                 "ref": {"type": "string", "x-gts-ref": "gts.x.test._.foo.v1~"}
             },
         }
-        errors = build_effective_traits([schema], {}, None).validate(
+        errors = build_effective_traits([schema], {}, DRAFT7).validate(
             check_unresolved=False, reference_store=FakeStore()
         )
         assert any(
@@ -298,13 +300,13 @@ class TestBuildEffectiveTraits:
     def test_incompatible_trait_schema_chain_flagged(self):
         # Second schema narrows type incompatibly with the ancestor.
         effective = build_effective_traits(
-            [{"type": "string"}, {"type": "integer"}], {}, None
+            [{"type": "string"}, {"type": "integer"}], {}, DRAFT7
         )
         errors = effective.validate(check_unresolved=True)
         assert any("incompatible with ancestor trait schema" in e for e in errors)
 
     def test_invalid_trait_schema_integrity_flagged(self):
-        effective = build_effective_traits([{"type": "not-a-real-type"}], {}, None)
+        effective = build_effective_traits([{"type": "not-a-real-type"}], {}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any("not a valid JSON Schema" in e for e in errors)
 
@@ -339,6 +341,6 @@ class TestBuildEffectiveTraits:
             "type": "object",
             "properties": {"ref": {"type": "string", "x-gts-ref": "not-valid"}},
         }
-        effective = build_effective_traits([schema], {"ref": "also-not-valid"}, None)
+        effective = build_effective_traits([schema], {"ref": "also-not-valid"}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
         assert any(e.startswith("trait x-gts-ref:") for e in errors)

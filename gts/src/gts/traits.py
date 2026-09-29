@@ -23,7 +23,7 @@ from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
-from .schema_validation import map_schema_nodes, validator_for
+from .schema_validation import check_schema, map_schema_nodes, validator_for
 from .x_gts_ref import XGtsRefValidator
 
 X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
@@ -314,8 +314,7 @@ def _validate_trait_schema_integrity(
             if dialect:
                 schema["$schema"] = dialect
             try:
-                cls = validator_for(schema)
-                cls.check_schema(schema)
+                check_schema(schema)
             except Exception as e:  # noqa: BLE001 - surfaced as validation error message
                 return [f"{X_GTS_TRAITS_SCHEMA}[{i}] is not a valid JSON Schema: {e}"]
         else:

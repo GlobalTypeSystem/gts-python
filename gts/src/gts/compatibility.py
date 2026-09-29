@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from jsonschema.validators import validator_for
 from jsonsubschema import isSubschema
+
+from .schema_validation import validator_for
 
 COMPATIBLE = "compatible"
 INCOMPATIBLE = "incompatible"
@@ -85,7 +86,9 @@ def _value_constraint_makes_type_redundant(schema: dict[Any, Any]) -> bool:
     if values is None:
         return False
     try:
-        validator = validator_for({"type": schema["type"]})({"type": schema["type"]})
+        validator = validator_for(
+            {"type": schema["type"]}, inherited_dialect="draft-07"
+        )({"type": schema["type"]})
         return all(validator.is_valid(value) for value in values)
     except Exception:  # noqa: BLE001 - intentional broad fallback
         return False
@@ -96,8 +99,10 @@ def _finite_subset(subset: Any, superset: Any) -> bool | None:
     if values is None:
         return None
     try:
-        subset_validator = validator_for(subset)(subset)
-        superset_validator = validator_for(superset)(superset)
+        subset_validator = validator_for(subset, inherited_dialect="draft-07")(subset)
+        superset_validator = validator_for(superset, inherited_dialect="draft-07")(
+            superset
+        )
         return all(
             not subset_validator.is_valid(value) or superset_validator.is_valid(value)
             for value in values

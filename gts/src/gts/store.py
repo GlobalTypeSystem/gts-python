@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from referencing import Registry, Resource
-from referencing.jsonschema import DRAFT202012
+from referencing.jsonschema import DRAFT7, DRAFT201909, DRAFT202012
 
 from . import compatibility, derivation, schema_dialect, schema_resolver, traits
 from ._errors import (
@@ -35,7 +35,7 @@ from .schema_cast import GtsEntityCastResult
 
 # Re-exported for backward compatibility; the limit now lives in schema_resolver.
 from .schema_resolver import MAX_SCHEMA_REF_EXPANSIONS  # noqa: F401
-from .schema_validation import FORMAT_CHECKER, iter_schema_nodes, validator_for
+from .schema_validation import FORMAT_CHECKER, check_schema, iter_schema_nodes
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref, extended_validator_for
 
 logger = logging.getLogger(__name__)
@@ -457,9 +457,15 @@ class GtsStore:
     ) -> Registry:
         for entity_id, entity in entities.items():
             if entity.is_schema and isinstance(entity.content, dict):
+                dialect = schema_dialect.document_dialect(entity.content)
+                specification = {
+                    "draft-07": DRAFT7,
+                    "2019-09": DRAFT201909,
+                    "2020-12": DRAFT202012,
+                }[dialect]
                 resource = Resource.from_contents(
                     _without_x_gts_ref(entity.content),
-                    default_specification=DRAFT202012,
+                    default_specification=specification,
                 )
                 registry = registry.with_resource(with_scheme(entity_id), resource)
         return registry
@@ -843,13 +849,16 @@ class GtsStore:
                     + "; ".join(errors)
                 )
 
-    def _resolve_schema_refs(self, schema: Any) -> Any:
+    def _resolve_schema_refs(self, schema: Any, dialect: str | None = None) -> Any:
         """Resolve external ``$ref`` targets by inlining them from the store.
 
         Thin adapter over :func:`schema_resolver.resolve_schema_refs`, passing
         the store's :meth:`get_schema_content` as the reference provider.
         """
-        return schema_resolver.resolve_schema_refs(schema, self.get_schema_content)
+        effective_dialect = dialect or self._schema_dialect(schema)
+        return schema_resolver.resolve_schema_refs(
+            schema, self.get_schema_content, effective_dialect
+        )
 
     @staticmethod
     def _supports_ref_siblings(schema: Any) -> bool:
@@ -908,7 +917,9 @@ class GtsStore:
                 # Inline local JSON Pointer refs against the host document, then
                 # resolve any gts:// refs so the composed schema is self-contained.
                 inlined = traits.inline_local_pointers(ts, content)
-                trait_schemas.append(self._resolve_schema_refs(inlined))
+                trait_schemas.append(
+                    self._resolve_schema_refs(inlined, self._schema_dialect(content))
+                )
 
             level_traits: dict[str, Any] = {}
             traits.collect_traits_from_value(content, level_traits)
@@ -1023,10 +1034,10 @@ class GtsStore:
         self._validate_schema_chain(schema_id.id, schema_content)
 
         try:
-            validator_class = validator_for(
-                {"$schema": self._schema_dialect_uri(schema_content)}
+            check_schema(
+                schema_content,
+                {"$schema": self._schema_dialect_uri(schema_content)},
             )
-            validator_class.check_schema(schema_content)
 
             logger.info(
                 f"Schema {schema_id.id} passed JSON Schema meta-schema validation"

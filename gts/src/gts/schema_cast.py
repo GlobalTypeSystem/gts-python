@@ -10,6 +10,7 @@ from referencing import Registry
 
 from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
+from .schema_dialect import effective_dialect
 from .schema_validation import validator_for
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,9 @@ class GtsEntityCastResult:
         from_schema_content: dict,
         to_schema_content: dict,
         resolver: Any | None = None,
+        inherited_dialect: str | None = None,
     ) -> GtsEntityCastResult:
+        target_dialect = effective_dialect(to_schema_content, inherited_dialect)
         # Flatten target schema to merge allOf and get all properties including const values
         target_schema = cls._flatten_schema(to_schema_content)
 
@@ -154,9 +157,13 @@ class GtsEntityCastResult:
         # Allow GTS ID changes in const values
         try:
             if resolver is not None:
-                cls._validate_with_gts_id_tolerance(casted, to_schema_content, resolver)
+                cls._validate_with_gts_id_tolerance(
+                    casted, to_schema_content, target_dialect, resolver
+                )
             else:
-                cls._validate_with_gts_id_tolerance(casted, to_schema_content, None)
+                cls._validate_with_gts_id_tolerance(
+                    casted, to_schema_content, target_dialect, None
+                )
             is_fully_compatible = is_backward and is_forward
         except js_exceptions.ValidationError as ve:
             reasons.append(ve.message)
@@ -382,13 +389,16 @@ class GtsEntityCastResult:
     def _validate_with_gts_id_tolerance(
         instance: dict[str, Any],
         schema: dict[str, Any],
+        inherited_dialect: str,
         resolver: Any | None = None,
     ) -> None:
         """Validate instance against schema, but allow const values to differ if both are GTS IDs."""
         # Create a modified schema that removes const constraints for GTS IDs
         modified_schema = GtsEntityCastResult._remove_gts_const_constraints(schema)
 
-        validator_class = validator_for(modified_schema)
+        validator_class = validator_for(
+            modified_schema, inherited_dialect=inherited_dialect
+        )
         if isinstance(resolver, Registry):
             validator = validator_class(modified_schema, registry=resolver)
         elif resolver is not None:
