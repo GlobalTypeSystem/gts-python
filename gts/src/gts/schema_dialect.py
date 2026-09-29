@@ -27,9 +27,13 @@ SUPPORTED_DIALECTS = frozenset(_DIALECT_URI)
 
 
 def require_dialect(dialect: str | None) -> str:
-    if dialect not in SUPPORTED_DIALECTS:
-        raise ValueError(f"Unsupported JSON Schema dialect: {dialect}")
-    return dialect
+    if dialect in SUPPORTED_DIALECTS:
+        return dialect
+    if isinstance(dialect, str):
+        normalized = dialect.removesuffix("#").lower().replace("https://", "http://", 1)
+        if normalized in _SUPPORTED:
+            return _SUPPORTED[normalized]
+    raise ValueError(f"Unsupported JSON Schema dialect: {dialect}")
 
 
 def effective_dialect(schema: Any, inherited_dialect: str | None = None) -> str:

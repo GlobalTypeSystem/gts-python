@@ -608,13 +608,15 @@ class GtsOps:
         """
         gts_ref_validation = _normalize_gts_ref_validation(gts_ref_validation)
         if not validate:
-            results = [
+            direct_results = [
                 self.add_schema(
                     schema, validate=False, gts_ref_validation=gts_ref_validation
                 )
                 for schema in schemas
             ]
-            return GtsAddSchemasResult(ok=all(r.ok for r in results), results=results)
+            return GtsAddSchemasResult(
+                ok=all(r.ok for r in direct_results), results=direct_results
+            )
 
         results: list[GtsAddSchemaResult | None] = [None] * len(schemas)
         # Track every still-staged token so an exception anywhere below discards

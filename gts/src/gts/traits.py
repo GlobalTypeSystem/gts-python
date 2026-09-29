@@ -98,6 +98,7 @@ class EffectiveTraits:
             reference_store,
             gts_ref_validation,
             selected_type_id,
+            self.dialect,
         )
 
 
@@ -358,12 +359,15 @@ def _validate_trait_schema_compatibility(
 
 
 def _validate_traits_against_schema(
-    trait_schema: Any, effective_traits: Any, check_unresolved: bool
+    trait_schema: Any,
+    effective_traits: Any,
+    check_unresolved: bool,
+    inherited_dialect: str | None,
 ) -> list[str]:
     errors: list[str] = []
 
     try:
-        cls = validator_for(trait_schema)
+        cls = validator_for(trait_schema, inherited_dialect=inherited_dialect)
         validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
@@ -403,6 +407,7 @@ def _validate_trait_values(
     reference_store: Any | None,
     gts_ref_validation: GtsRefValidationMode,
     selected_type_id: str | None,
+    inherited_dialect: str | None,
 ) -> list[str]:
     schema_for_values = (
         effective_traits_schema
@@ -410,9 +415,13 @@ def _validate_trait_values(
         else _without_required(effective_traits_schema)
     )
     errors = _validate_traits_against_schema(
-        schema_for_values, effective_traits, check_unresolved
+        schema_for_values, effective_traits, check_unresolved, inherited_dialect
     )
-    xref = XGtsRefValidator(store=reference_store, mode=gts_ref_validation)
+    xref = XGtsRefValidator(
+        store=reference_store,
+        mode=gts_ref_validation,
+        inherited_dialect=inherited_dialect,
+    )
     for err in xref.validate_schema_ref_existence(
         effective_traits_schema, selected_type_id=selected_type_id
     ):

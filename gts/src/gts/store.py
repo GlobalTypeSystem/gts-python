@@ -413,7 +413,13 @@ class GtsStore:
                 existing = pending_by_key.get(key, self._by_id.get(key))
                 if existing is not None:
                     identical = existing.content == staged.content
-                    outcome = "unchanged" if identical or allow_updates else "conflict"
+                    outcome = (
+                        "unchanged"
+                        if identical
+                        else "added"
+                        if allow_updates
+                        else "conflict"
+                    )
                     if outcome == "conflict":
                         any_conflict = True
                     outcomes.append(outcome)
@@ -1101,7 +1107,11 @@ class GtsStore:
                 )
 
             effective_traits = self._build_effective_traits(schema_id.id)
-            trait_ref_validator = XGtsRefValidator(store=self, mode=gts_ref_validation)
+            trait_ref_validator = XGtsRefValidator(
+                store=self,
+                mode=gts_ref_validation,
+                inherited_dialect=effective_traits.dialect,
+            )
             trait_ref_validator.validate_schema_ref_existence(
                 effective_traits.schema, selected_type_id=schema_id.id
             )

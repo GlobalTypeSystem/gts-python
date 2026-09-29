@@ -162,3 +162,15 @@ def test_commit_batch_publishes_nothing_when_a_target_conflicts_with_committed()
     # Nothing from the batch was published; the parent keeps its committed content.
     assert ops.store.get_committed(child) is None
     assert ops.store.get_committed(parent).content["title"] == "committed"
+
+
+def test_commit_batch_publishes_changed_content_when_updates_are_enabled():
+    ops = GtsOps(path=None, allow_entity_updates=True)
+    type_id = "gts.x.pyatomic3._.updated.v1~"
+    assert ops.add_schema(_schema(type_id, "old")).ok
+
+    result = ops.add_schemas([_schema(type_id, "new")], validate=True)
+
+    assert result.ok
+    assert result.results[0].ok
+    assert ops.store.get_committed(type_id).content["title"] == "new"
