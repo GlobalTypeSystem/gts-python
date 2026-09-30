@@ -14,6 +14,8 @@ via :func:`check_accepted_set_inclusion`.
 
 from __future__ import annotations
 
+import signal
+import threading
 from typing import Any
 
 from jsonsubschema import isSubschema
@@ -181,6 +183,50 @@ def _coerce_bool_schema(schema: Any) -> Any:
     return schema
 
 
+# ``jsonsubschema`` decides ``pattern`` inclusion by compiling each pattern into
+# a finite-state machine with ``greenery``. That FSM construction is unbounded
+# and suffers state explosion on adversarial but short patterns such as
+# ``^(a+)+$`` (CWE-1333), pinning the process at 100% CPU indefinitely. Bounding
+# the call keeps compatibility checking responsive: a check that exceeds the
+# budget is reported as an inconclusive ``unknown`` verdict rather than hanging,
+# mirroring how the direct pattern matchers are bounded elsewhere in this package
+# and in the sibling runtimes.
+_INCLUSION_TIMEOUT_SECONDS = 1.0
+
+
+class _InclusionTimeout(Exception):
+    """Raised when an inclusion check exceeds ``_INCLUSION_TIMEOUT_SECONDS``."""
+
+
+def _run_within_budget(func):
+    """Run ``func`` under a wall-clock budget, raising ``_InclusionTimeout`` on
+    overrun.
+
+    ``SIGALRM`` interrupts the pure-Python FSM construction between bytecodes.
+    Signals can only be armed on the main thread, and the ``/compatibility`` and
+    ``/validate-type-schema`` handlers run the check there (async handlers on the
+    event loop). Where that does not hold (a non-main thread, or a platform
+    without ``SIGALRM``), fall back to running ``func`` unbounded; the caller
+    treats any failure as an inconclusive verdict, so correctness holds even
+    where the bound cannot be enforced.
+    """
+    if not hasattr(signal, "SIGALRM") or (
+        threading.current_thread() is not threading.main_thread()
+    ):
+        return func()
+
+    def _raise_timeout(signum: int, frame: Any) -> None:
+        raise _InclusionTimeout()
+
+    previous_handler = signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, _INCLUSION_TIMEOUT_SECONDS)
+    try:
+        return func()
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
 def _is_subschema(subset: Any, superset: Any) -> bool | None:
     """``Valid(subset) subset-of Valid(superset)`` or ``None`` when unprovable."""
     lowered_subset = _lower_root_unevaluated_properties(subset)
@@ -191,10 +237,12 @@ def _is_subschema(subset: Any, superset: Any) -> bool | None:
     if finite_result is not None:
         return finite_result
     try:
-        return bool(
-            isSubschema(
-                _coerce_bool_schema(sanitize(lowered_subset)),
-                _coerce_bool_schema(sanitize(lowered_superset)),
+        return _run_within_budget(
+            lambda: bool(
+                isSubschema(
+                    _coerce_bool_schema(sanitize(lowered_subset)),
+                    _coerce_bool_schema(sanitize(lowered_superset)),
+                )
             )
         )
     except Exception:  # noqa: BLE001 - intentional broad fallback
