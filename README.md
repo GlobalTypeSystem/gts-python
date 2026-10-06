@@ -4,7 +4,7 @@
 
 A minimal, idiomatic Python library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and JSON/JSON Schema artifacts.
 
-Current supported GTS spec version: `0.14.5`
+Current supported GTS spec version: `0.15.0`. Conformance CI pins the released gts-spec `v0.15.0` in [`.gts-spec-version`](.gts-spec-version) and the `.gts-spec` submodule; run `make update-spec` to check the pinned release out. The 0.15 breaking change is the [safe regular-expression profile](gts/README.md#regular-expressions).
 
 ## Roadmap
 
@@ -117,6 +117,15 @@ curl -s http://127.0.0.1:8000/openapi.json | jq | less -S
 ### Testing
 
 You can test the gts-python library by utilizing the shared test suite from the [gts-spec](https://github.com/GlobalTypeSystem/gts-spec) specification and executing the tests against the web server.
+
+With `make`, `e2e` starts the server and runs the conformance suite. By default it uses the `.gts-spec` submodule and requires it to match `.gts-spec-version`; `GTS_SPEC_DIR` selects another checkout (used as-is, e.g. an unreleased spec draft) and `E2E_PORT` the server port:
+
+```bash
+make e2e                                          # pinned submodule, port 8000
+GTS_SPEC_DIR=../gts-spec E2E_PORT=18082 make e2e  # local gts-spec checkout
+```
+
+Changing `GTS_SPEC_DIR` reinstalls the selected checkout's test requirements in the shared virtual environment, including when switching back to a previous checkout.
 
 Executing gts-spec Tests on the Server:
 

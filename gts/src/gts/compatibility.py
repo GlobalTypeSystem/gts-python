@@ -10,15 +10,20 @@ Rather than re-implement the inclusion engine, this module delegates the
 inclusion primitive to the ``jsonsubschema`` library and only adds the GTS
 verdict vocabulary on top. Schema derivation (OP#12) reuses the same primitive
 via :func:`check_accepted_set_inclusion`.
+
+Regex constraints are factored out or reported as unprovable: ``jsonsubschema``
+uses Python/greenery semantics rather than the GTS profile (spec sec 11.0.1).
 """
 
 from __future__ import annotations
 
+import copy
+import json
 from typing import Any
 
 from jsonsubschema import isSubschema
 
-from .schema_validation import validator_for
+from .schema_validation import FORMAT_CHECKER, RegexEvaluationError, validator_for
 
 COMPATIBLE = "compatible"
 INCOMPATIBLE = "incompatible"
@@ -90,6 +95,8 @@ def _value_constraint_makes_type_redundant(schema: dict[Any, Any]) -> bool:
             {"type": schema["type"]}, inherited_dialect="draft-07"
         )({"type": schema["type"]})
         return all(validator.is_valid(value) for value in values)
+    except RegexEvaluationError:
+        raise
     except Exception:  # noqa: BLE001 - intentional broad fallback
         return False
 
@@ -99,14 +106,19 @@ def _finite_subset(subset: Any, superset: Any) -> bool | None:
     if values is None:
         return None
     try:
-        subset_validator = validator_for(subset, inherited_dialect="draft-07")(subset)
+        # Formats are asserted as at runtime, so `format: "regex"` checks the profile.
+        subset_validator = validator_for(subset, inherited_dialect="draft-07")(
+            subset, format_checker=FORMAT_CHECKER
+        )
         superset_validator = validator_for(superset, inherited_dialect="draft-07")(
-            superset
+            superset, format_checker=FORMAT_CHECKER
         )
         return all(
             not subset_validator.is_valid(value) or superset_validator.is_valid(value)
             for value in values
         )
+    except RegexEvaluationError:
+        raise
     except Exception:  # noqa: BLE001 - intentional broad fallback
         return None
 
@@ -190,15 +202,209 @@ def _is_subschema(subset: Any, superset: Any) -> bool | None:
     finite_result = _finite_subset(lowered_subset, lowered_superset)
     if finite_result is not None:
         return finite_result
+    factored = _factor_regex_constraints(lowered_subset, lowered_superset)
+    if factored is None:
+        return None
+    regex_free_subset, regex_free_superset, was_factored = factored
     try:
-        return bool(
+        included = bool(
             isSubschema(
-                _coerce_bool_schema(sanitize(lowered_subset)),
-                _coerce_bool_schema(sanitize(lowered_superset)),
+                _coerce_bool_schema(sanitize(regex_free_subset)),
+                _coerce_bool_schema(sanitize(regex_free_superset)),
             )
         )
+        # After factoring, only a positive answer carries over.
+        return True if included else (None if was_factored else False)
     except Exception:  # noqa: BLE001 - intentional broad fallback
         return None
+
+
+# --- regex-bearing operands ----------------------------------------------
+#
+# Keywords whose values are literal data, never schemas or expressions.
+_LITERAL_KEYWORDS = {"const", "default", "enum", "examples"}
+
+
+def _is_ignored(key: Any) -> bool:
+    # Literal data, and GTS extensions: sanitize() strips ``x-gts-*`` before the
+    # inclusion engine runs (trait schemas are compared separately, OP#13).
+    return key in _LITERAL_KEYWORDS or (
+        isinstance(key, str) and key.startswith("x-gts-")
+    )
+
+
+# Keywords whose values map names (not expressions) to subschemas.
+_NAMED_SCHEMA_MAPS = {
+    "$defs",
+    "definitions",
+    "dependencies",
+    "dependentSchemas",
+    "properties",
+}
+
+
+# Keywords that may carry a safe-profile assertion; jsonsubschema would read
+# patterns with Python semantics and ignores `format: "regex"` entirely.
+_REGEX_KEYWORDS = ("format", "pattern", "patternProperties", "propertyNames")
+# Factor these whole; anyOf/oneOf also annotate evaluated properties and items.
+_OPAQUE_CONJUNCTS = ("not", "anyOf", "oneOf")
+# Keywords that change which array elements a sibling ``items`` applies to.
+_ITEM_CONTEXT_KEYWORDS = ("additionalItems", "prefixItems", "unevaluatedItems")
+
+
+def _has_regex(node: Any) -> bool:
+    """Whether any regular expression occurs in ``node`` (conservatively)."""
+    if isinstance(node, list):
+        return any(_has_regex(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    for key, value in node.items():
+        if _is_ignored(key):
+            continue
+        if key == "pattern" or (key == "patternProperties" and value):
+            return True
+        if key == "format" and value == "regex":
+            return True
+        if key in _NAMED_SCHEMA_MAPS and isinstance(value, dict):
+            if any(_has_regex(child) for child in value.values()):
+                return True
+        elif _has_regex(value):
+            return True
+    return False
+
+
+def _mentions(node: Any, matches: Any) -> bool:
+    """Whether ``matches(dict)`` holds for any object in ``node``, literal data
+    included (``x-gts-*`` values are stripped before inclusion, so skipped)."""
+    if isinstance(node, list):
+        return any(_mentions(item, matches) for item in node)
+    if not isinstance(node, dict):
+        return False
+    return matches(node) or any(
+        _mentions(value, matches)
+        for key, value in node.items()
+        if not (isinstance(key, str) and key.startswith("x-gts-"))
+    )
+
+
+def _ref_may_reach_regex(schema: Any) -> bool:
+    # References may reach regexes in literal data; treat inclusion as unprovable.
+    def is_ref(node: dict[str, Any]) -> bool:
+        return any(key in node for key in ("$ref", "$dynamicRef", "$recursiveRef"))
+
+    def is_regex(node: dict[str, Any]) -> bool:
+        return (
+            "pattern" in node
+            or bool(node.get("patternProperties"))
+            or node.get("format") == "regex"
+        )
+
+    return _mentions(schema, is_ref) and _mentions(schema, is_regex)
+
+
+def _has_keyword(node: Any, keyword: str) -> bool:
+    if isinstance(node, list):
+        return any(_has_keyword(item, keyword) for item in node)
+    if not isinstance(node, dict):
+        return False
+    return any(
+        key == keyword or (not _is_ignored(key) and _has_keyword(value, keyword))
+        for key, value in node.items()
+    )
+
+
+def _collect_regex_constraints(
+    schema: Any, *, is_subset: bool
+) -> tuple[Any, list[tuple[tuple[Any, ...], str, Any]]] | None:
+    """Split out regex constraints at positive conjunctive locations.
+
+    Traverse root, ``properties``, ``allOf`` and single-schema ``items`` without
+    sibling ``prefixItems``/``additionalItems``/``unevaluatedItems``. Collect
+    regex-bearing ``not``/``anyOf``/``oneOf`` whole; regexes elsewhere return ``None``.
+
+    Removal must widen the subset: ``patternProperties`` requires unconstrained
+    ``additionalProperties`` and no ``unevaluatedProperties``. Removing
+    ``anyOf``/``oneOf`` requires no unevaluated property/item constraints because
+    they annotate evaluated locations.
+    """
+    constraints: list[tuple[tuple[Any, ...], str, Any]] = []
+    stripped = copy.deepcopy(schema)
+    has_unevaluated = _has_keyword(schema, "unevaluatedProperties")
+    has_unevaluated_items = _has_keyword(schema, "unevaluatedItems")
+
+    def removable(node: dict[str, Any], key: str) -> bool:
+        if key in ("anyOf", "oneOf"):
+            return not (has_unevaluated or has_unevaluated_items)
+        if key != "patternProperties" or not is_subset:
+            return True
+        additional = node.get("additionalProperties", True)
+        return not has_unevaluated and boolean_schema_value(additional) is True
+
+    def walk(node: Any, location: tuple[Any, ...]) -> bool:
+        if not isinstance(node, dict):
+            return True
+        for key in list(node):
+            value = node[key]
+            if _is_ignored(key):
+                continue
+            if (key in _REGEX_KEYWORDS or key in _OPAQUE_CONJUNCTS) and _has_regex(
+                {key: value}
+            ):
+                if not removable(node, key):
+                    return False
+                constraints.append((location, key, copy.deepcopy(value)))
+                del node[key]
+            elif key == "properties" and isinstance(value, dict):
+                for name, child in value.items():
+                    if not walk(child, (*location, ("properties", name))):
+                        return False
+            elif key == "items" and isinstance(value, dict):
+                # prefixItems shifts which elements this items location constrains.
+                if any(k in node for k in _ITEM_CONTEXT_KEYWORDS) and _has_regex(value):
+                    return False
+                if not walk(value, (*location, ("items",))):
+                    return False
+            elif key == "allOf" and isinstance(value, list):
+                if not all(walk(child, location) for child in value):
+                    return False
+            elif _has_regex({key: value}):
+                return False
+        return True
+
+    if not walk(stripped, ()):
+        return None
+    return stripped, constraints
+
+
+def _factor_regex_constraints(
+    subset: Any, superset: Any
+) -> tuple[Any, Any, bool] | None:
+    """Return regex-free ``(subset, superset, factored)``, or ``None`` if unsound.
+
+    Every removed superset constraint must occur identically at the same subset
+    location. Removal only widens the subset, so inclusion of the stripped
+    operands proves inclusion of the originals. After factoring, a negative is inconclusive.
+    Operands without regexes are returned unchanged with ``factored=False``.
+    """
+    if _ref_may_reach_regex(subset) or _ref_may_reach_regex(superset):
+        return None
+    if not _has_regex(subset) and not _has_regex(superset):
+        return subset, superset, False
+    split_subset = _collect_regex_constraints(subset, is_subset=True)
+    split_superset = _collect_regex_constraints(superset, is_subset=False)
+    if split_subset is None or split_superset is None:
+        return None
+    stripped_subset, subset_constraints = split_subset
+    stripped_superset, superset_constraints = split_superset
+    # JSON spelling distinguishes bools from numbers; 1 vs 1.0 is conservative.
+    subset_keys = {_json_key(item) for item in subset_constraints}
+    if any(_json_key(item) not in subset_keys for item in superset_constraints):
+        return None
+    return stripped_subset, stripped_superset, True
+
+
+def _json_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=repr)
 
 
 def _verdict(result: bool | None) -> str:

@@ -7,14 +7,20 @@ import threading
 import uuid
 from abc import ABC, abstractmethod
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7, DRAFT201909, DRAFT202012
 
-from . import compatibility, derivation, schema_dialect, schema_resolver, traits
+from . import (
+    compatibility,
+    derivation,
+    schema_dialect,
+    schema_resolver,
+    traits,
+)
 from ._errors import (
     GtsNotFoundError,
     GtsUnresolvedRefError,
@@ -35,7 +41,13 @@ from .schema_cast import GtsEntityCastResult
 
 # Re-exported for backward compatibility; the limit now lives in schema_resolver.
 from .schema_resolver import MAX_SCHEMA_REF_EXPANSIONS  # noqa: F401
-from .schema_validation import FORMAT_CHECKER, check_schema, iter_schema_nodes
+from .schema_validation import (
+    FORMAT_CHECKER,
+    RegexEvaluationError,
+    check_schema,
+    check_schema_regexes,
+    iter_schema_nodes,
+)
 from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref, extended_validator_for
 
 logger = logging.getLogger(__name__)
@@ -475,6 +487,47 @@ class GtsStore:
                 )
                 registry = registry.with_resource(with_scheme(entity_id), resource)
         return registry
+
+    def _create_schema_reference_registry(
+        self, *schemas: dict[str, Any]
+    ) -> tuple[Registry, Callable[[str], None]]:
+        """Collect reference candidates; defer dialect errors until they are used."""
+        registry = Registry()
+        invalid: dict[str, ValueError] = {}
+        seen: set[str] = set()
+        pending: list[Any] = list(schemas)
+        while pending:
+            node = pending.pop()
+            if isinstance(node, list):
+                pending.extend(node)
+            elif isinstance(node, dict):
+                # Scan literal data too: a local pointer can make it a schema.
+                pending.extend(node.values())
+                for keyword in ("$ref", "$recursiveRef", "$dynamicRef"):
+                    ref = node.get(keyword)
+                    if not isinstance(ref, str) or not ref.startswith(GTS_URI_PREFIX):
+                        continue
+                    uri = ref.partition("#")[0]
+                    if uri in seen:
+                        continue
+                    seen.add(uri)
+                    entity = self.get(uri)
+                    if entity and entity.is_schema and isinstance(entity.content, dict):
+                        try:
+                            registry = self._registry_with_schemas(
+                                registry, {strip_scheme(uri): entity}
+                            )
+                        except ValueError as error:
+                            invalid[uri] = error
+                        else:
+                            pending.append(entity.content)
+
+        def on_unresolved(ref: str) -> None:
+            error = invalid.get(ref.partition("#")[0])
+            if error is not None:
+                raise error
+
+        return registry, on_unresolved
 
     def _create_reference_registry(self) -> Registry:
         with self._lock:
@@ -1032,6 +1085,15 @@ class GtsStore:
         # A subschema may not switch JSON Schema dialect (spec sec 11); the whole
         # type is read under the dialect its top-level $schema selects.
         schema_dialect.check_subschemas(schema_content)
+        # Reject unsupported schema regexes before evaluation, and report engine
+        # failures with the schema rather than at the first match (spec sec 11.0.1).
+        registry, on_unresolved = self._create_schema_reference_registry(schema_content)
+        check_schema_regexes(
+            schema_content,
+            registry=registry,
+            compile_patterns=True,
+            on_unresolved=on_unresolved,
+        )
         logger.info(f"Validating schema {schema_id.id}")
         self._validate_schema_refs(schema_content, "")
         self._validate_schema_ref_targets(schema_content)
@@ -1048,6 +1110,8 @@ class GtsStore:
             logger.info(
                 f"Schema {schema_id.id} passed JSON Schema meta-schema validation"
             )
+        except RegexEvaluationError:
+            raise
         except Exception as error:
             raise ValueError(
                 f"JSON Schema validation failed for '{schema_id.id}': {error!s}"
@@ -1133,6 +1197,8 @@ class GtsStore:
                         self._validate_entity_transitive(
                             dependency_id, visiting, validated, gts_ref_validation
                         )
+                    except RegexEvaluationError:
+                        raise
                     except Exception as error:
                         raise ValueError(
                             f"Referenced x-gts-ref entity '{dependency_id}' is invalid: {error}"
@@ -1155,6 +1221,8 @@ class GtsStore:
                     self._validate_schema_transitive(
                         ancestor_id, visiting, validated, gts_ref_validation
                     )
+                except RegexEvaluationError:
+                    raise
                 except Exception as error:
                     raise ValueError(
                         f"Ancestor type '{ancestor_id}' is invalid: {error}"
@@ -1172,6 +1240,8 @@ class GtsStore:
                         self._validate_entity_transitive(
                             dependency_id, visiting, validated, gts_ref_validation
                         )
+                except RegexEvaluationError:
+                    raise
                 except Exception as error:
                     raise ValueError(
                         f"Referenced entity '{dependency_id}' is invalid: {error}"
@@ -1243,6 +1313,8 @@ class GtsStore:
                     entity_id, visiting, validated, gts_ref_validation
                 )
                 return True
+            except RegexEvaluationError:
+                raise
             except Exception as error:  # noqa: BLE001 - try another wildcard match
                 logger.debug("Invalid wildcard candidate %s: %s", entity_id, error)
                 continue
@@ -1261,8 +1333,11 @@ class GtsStore:
         except KeyError as error:
             raise StoreGtsSchemaNotFound(schema_type.id) from error
 
-        self._validate_schema_chain(schema_type.id)
         self._schema_dialect(schema)
+        registry, on_unresolved = self._create_schema_reference_registry(schema)
+        # Registration may have skipped validation; check regex support now.
+        check_schema_regexes(schema, registry=registry, on_unresolved=on_unresolved)
+        self._validate_schema_chain(schema_type.id)
         if isinstance(schema, dict) and self._content_is_abstract(schema):
             raise ValueError(
                 f"type '{schema_type.id}' is abstract and cannot have direct instances"
@@ -1281,7 +1356,7 @@ class GtsStore:
         )
         validator = validator_class(
             schema_for_validation,
-            registry=self._create_reference_registry(),
+            registry=registry,
             format_checker=FORMAT_CHECKER,
         )
         validator.validate(content)
@@ -1332,6 +1407,8 @@ class GtsStore:
                 self._validate_schema_transitive(
                     obj.type_id, visiting, validated, gts_ref_validation
                 )
+            except RegexEvaluationError:
+                raise
             except Exception as error:
                 raise ValueError(
                     f"Instance type '{obj.type_id}' is invalid: {error}"
@@ -1343,6 +1420,8 @@ class GtsStore:
                         self._validate_entity_transitive(
                             dependency_id, visiting, validated, gts_ref_validation
                         )
+                    except RegexEvaluationError:
+                        raise
                     except Exception as error:
                         raise ValueError(
                             f"Referenced entity '{dependency_id}' is invalid: {error}"
@@ -1419,7 +1498,12 @@ class GtsStore:
                 raise StoreGtsObjectNotFound(from_schema_id)
 
         # Create a resolver to handle $ref in schemas
-        registry = self._create_reference_registry()
+        registry, on_unresolved = self._create_schema_reference_registry(
+            from_schema.content, to_schema.content
+        )
+        check_schema_regexes(
+            to_schema.content, registry=registry, on_unresolved=on_unresolved
+        )
 
         return from_entity.cast(to_schema, from_schema, resolver=registry)
 

@@ -7,7 +7,7 @@ from typing import Optional
 import pytest
 from gts.entities import DEFAULT_GTS_CONFIG, GtsEntity
 from gts.gts import GtsID
-from gts.schema_validation import PATTERN_TIMEOUT_SECONDS, check_schema, validator_for
+from gts.schema_validation import check_schema, validator_for
 from gts.store import (
     MAX_SCHEMA_REF_EXPANSIONS,
     GtsReader,
@@ -57,13 +57,22 @@ def _schema_entity(gts_id: str, content_extra=None):
     return GtsEntity(content=content, gts_id=GtsID(gts_id), is_schema=True)
 
 
-class TestBoundedPatternValidation:
-    def test_schema_check_uses_ecma_compatible_regex_format(self):
+class TestSafeRegexPatternValidation:
+    def test_schema_check_rejects_lookaround_in_regex_format(self):
         schema = {
             "$schema": "http://json-schema.org/draft-07/schema#",
-            "pattern": r"^\p{Lu}(?=\p{Ll})",
+            "pattern": r"^[A-Z](?=[a-z])",
         }
-        check_schema(schema)
+        with pytest.raises(SchemaError):
+            check_schema(schema)
+
+    def test_schema_check_accepts_safe_profile_regex(self):
+        check_schema(
+            {
+                "$schema": "http://json-schema.org/draft-07/schema#",
+                "pattern": r"^[A-Z][a-z]+(?:\.[a-z]+){0,3}$",
+            }
+        )
 
     def test_schema_check_rejects_invalid_regex(self):
         schema = {
@@ -73,24 +82,19 @@ class TestBoundedPatternValidation:
         with pytest.raises(SchemaError):
             check_schema(schema)
 
-    def test_catastrophic_pattern_times_out(self):
-        validator = validator_for({"pattern": "(a+)+$"}, inherited_dialect="draft-07")({"pattern": "(a+)+$"})
-        errors = list(validator.iter_errors("a" * 30_000 + "!"))
-        assert len(errors) == 1
-        assert errors[0].message == "regular expression match timed out"
-        assert PATTERN_TIMEOUT_SECONDS == 0.25
-
-    def test_catastrophic_pattern_properties_key_times_out(self):
-        # patternProperties matches property NAMES; an adversarially long key
-        # against a catastrophic pattern must be bounded by the same timeout as
-        # the `pattern` keyword rather than backtracking indefinitely.
-        schema = {"patternProperties": {"(a+)+$": {"type": "string"}}}
+    def test_catastrophic_pattern_completes_linearly(self):
+        schema = {"pattern": "^(a+)+$"}
         validator = validator_for(schema, inherited_dialect="draft-07")(schema)
-        instance = {"a" * 30_000 + "!": "value"}
-        errors = list(validator.iter_errors(instance))
-        assert any(
-            error.message == "regular expression match timed out" for error in errors
-        )
+        errors = list(validator.iter_errors("a" * 50_000 + "!"))
+        assert [error.message for error in errors] == [
+            f"{'a' * 50_000 + '!'!r} does not match '^(a+)+$'"
+        ]
+
+    def test_catastrophic_pattern_properties_key_completes(self):
+        schema = {"patternProperties": {"^(a+)+$": {"type": "string"}}}
+        validator = validator_for(schema, inherited_dialect="draft-07")(schema)
+        assert validator.is_valid({"a" * 50_000 + "!": 1})
+        assert not validator.is_valid({"a" * 50_000: 1})
 
 
 class TestRegisterEdgeCases:

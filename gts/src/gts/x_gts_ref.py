@@ -12,17 +12,24 @@ Key optimizations:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from jsonschema.exceptions import ValidationError
-from jsonschema.validators import extend
 
 from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import GTS_PREFIX, strip_scheme
 from .gts import GtsID, GtsWildcard
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_dialect import effective_dialect
-from .schema_validation import iter_schema_nodes, map_schema_nodes, validator_for
+from .schema_validation import (
+    RegexEvaluationError,
+    UnsupportedRegexError,
+    iter_schema_nodes,
+    map_schema_nodes,
+    validator_family,
+    validator_for,
+)
 
 X_GTS_REF_SELF = "/$id"
 
@@ -92,23 +99,23 @@ def _make_x_gts_ref_keyword(selected_type_id: str | None):
 _x_gts_ref_keyword = _make_x_gts_ref_keyword(None)
 
 
-_EXTENDED_VALIDATORS: dict[tuple[type, str | None], type] = {}
+_EXTENDED_FAMILIES: dict[str | None, Mapping[str, type]] = {}
 
 
 def extended_validator_for(schema: Any, selected_type_id: str | None = None) -> type:
     """Return the ``jsonschema`` validator class for ``schema``'s dialect,
     extended so ``x-gts-ref`` is evaluated as a real keyword during structural
     validation (including inside combinators). ``selected_type_id`` is threaded
-    into the keyword so ``/$id`` resolves during combinator resolution."""
-    base = validator_for(schema)
-    key = (base, selected_type_id)
-    extended = _EXTENDED_VALIDATORS.get(key)
-    if extended is None:
-        extended = extend(
-            base, {"x-gts-ref": _make_x_gts_ref_keyword(selected_type_id)}
+    into the keyword so ``/$id`` resolves during combinator resolution.
+
+    The safe family preserves regex and ``x-gts-ref`` keywords across ``$schema`` changes."""
+    family = _EXTENDED_FAMILIES.get(selected_type_id)
+    if family is None:
+        family = validator_family(
+            {"x-gts-ref": _make_x_gts_ref_keyword(selected_type_id)}
         )
-        _EXTENDED_VALIDATORS[key] = extended
-    return extended
+        _EXTENDED_FAMILIES[selected_type_id] = family
+    return validator_for(schema, family=family)
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
@@ -150,6 +157,9 @@ def _is_structurally_valid(instance: Any, schema: Any, dialect: str) -> bool:
             _without_x_gts_ref(schema)
         )
         return validator.is_valid(instance)
+    except (RegexEvaluationError, UnsupportedRegexError):
+        # A regex failure fails the whole validation; it is not "not valid".
+        raise
     except Exception:  # noqa: BLE001 - treat any validation error as "not valid"
         return False
 

@@ -23,7 +23,13 @@ from . import derivation
 from ._json_pointer import resolve as resolve_json_pointer
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_validation import FORMAT_CHECKER as _FORMAT_CHECKER
-from .schema_validation import check_schema, map_schema_nodes, validator_for
+from .schema_validation import (
+    RegexEvaluationError,
+    check_schema,
+    check_schema_regexes,
+    map_schema_nodes,
+    validator_for,
+)
 from .x_gts_ref import XGtsRefValidator
 
 X_GTS_TRAITS_SCHEMA = "x-gts-traits-schema"
@@ -316,6 +322,8 @@ def _validate_trait_schema_integrity(
                 schema["$schema"] = dialect
             try:
                 check_schema(schema)
+            except RegexEvaluationError:
+                raise
             except Exception as e:  # noqa: BLE001 - surfaced as validation error message
                 return [f"{X_GTS_TRAITS_SCHEMA}[{i}] is not a valid JSON Schema: {e}"]
         else:
@@ -367,10 +375,15 @@ def _validate_traits_against_schema(
     errors: list[str] = []
 
     try:
+        check_schema_regexes(
+            trait_schema, dialect=inherited_dialect, compile_patterns=True
+        )
         cls = validator_for(trait_schema, inherited_dialect=inherited_dialect)
         validator = cls(trait_schema, format_checker=_FORMAT_CHECKER)
         for error in validator.iter_errors(effective_traits):
             errors.append(f"trait validation: {error.message}")
+    except RegexEvaluationError:
+        raise
     except Exception as e:  # noqa: BLE001 - surfaced as validation error message
         errors.append(f"failed to compile trait schema: {e}")
 
