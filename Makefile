@@ -17,6 +17,10 @@ PY_ENV_PYTHON := $(PY_ENV_DIR)/bin/python
 endif
 PYTHON ?= $(PY_ENV_PYTHON)
 PY_ENV_STAMP := $(PY_ENV_DIR)/.stamp
+# E2E spec checkout: the default submodule must match .gts-spec-version.
+# Overrides are used as-is, e.g. GTS_SPEC_DIR=../gts-spec make e2e.
+GTS_SPEC_DIR ?= .gts-spec
+E2E_PORT ?= 8000
 INSTALL_STAMP := $(PY_ENV_DIR)/.install-stamp
 LOCAL_DIST_DIR := dist-install-local
 
@@ -26,7 +30,7 @@ $(error PYTHON must be set for local package targets (examples: venv: PYTHON=.ve
 endif
 endif
 
-.PHONY: help py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec verify-spec-version e2e coverage gts-server
+.PHONY: help py-env force-py-env install build install-local uninstall-local clean dev-fmt all check fmt lint clippy mypy test security update-spec verify-spec-version e2e coverage gts-server
 
 # Default target - show help
 .DEFAULT_GOAL := help
@@ -43,16 +47,25 @@ py-env: $(PY_ENV_STAMP)
 $(PY_ENV_PYTHON):
 	$(PYTHON_BOOTSTRAP) -m venv --clear $(PY_ENV_DIR)
 
-$(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml .gts-spec/tests/requirements.txt requirements.txt Makefile
+# The shared environment must follow checkout switches, including A -> B -> A.
+ifneq ($(shell cat "$(PY_ENV_STAMP)" 2>/dev/null),$(abspath $(GTS_SPEC_DIR)))
+$(PY_ENV_STAMP): force-py-env
+endif
+
+force-py-env:
+
+$(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml $(GTS_SPEC_DIR)/tests/requirements.txt requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
+	@rm -f "$@"
 	$(PYTHON_BOOTSTRAP) -m venv $(PY_ENV_DIR)
 	$(PYTHON) -m pip install --upgrade pip
-	# Spec test-client deps, then httprunner (--no-deps: its own pins are
-	# incompatible with this venv), then local dev tooling + version overrides.
-	$(PYTHON) -m pip install -r .gts-spec/tests/requirements.txt
+	# Install httprunner separately with --no-deps to avoid incompatible pins
+	# and resolver backtracking; then install local tooling and overrides.
+	grep -viE '^[[:space:]]*httprunner([^A-Za-z0-9_.-]|$$)' $(GTS_SPEC_DIR)/tests/requirements.txt > $(PY_ENV_DIR)/spec-requirements.txt
+	$(PYTHON) -m pip install -r $(PY_ENV_DIR)/spec-requirements.txt
 	$(PYTHON) -m pip install --no-deps 'httprunner>=4,<5'
 	$(PYTHON) -m pip install -r requirements.txt
-	@touch $@
+	@printf '%s\n' "$(abspath $(GTS_SPEC_DIR))" > "$@"
 
 # Install gts package into the venv (editable, for development)
 install: $(INSTALL_STAMP)
@@ -125,13 +138,13 @@ PORT ?= 8000
 gts-server: install
 	$(PYTHON) -m gts server --host 127.0.0.1 --port $(PORT)
 
-# Run end-to-end tests against gts-spec (pinned via .gts-spec-version)
-e2e: install verify-spec-version
-	@echo "Starting server in background..."
-	@$(PYTHON) -m gts server --port 8000 & echo $$! > .server.pid
+# Run end-to-end tests against gts-spec (pinned via .gts-spec-version, or GTS_SPEC_DIR)
+e2e: install $(if $(filter .gts-spec,$(GTS_SPEC_DIR)),verify-spec-version)
+	@echo "Starting server on port $(E2E_PORT) in background..."
+	@$(PYTHON) -m gts server --host 127.0.0.1 --port $(E2E_PORT) & echo $$! > .server.pid
 	@sleep 2
-	@echo "Running e2e tests..."
-	@PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m pytest -p no:cacheprovider --log-file=e2e.log ./.gts-spec/tests || (kill `cat .server.pid` 2>/dev/null; rm -f .server.pid; exit 1)
+	@echo "Running e2e tests from $(GTS_SPEC_DIR)/tests..."
+	@PYTHONDONTWRITEBYTECODE=1 GTS_BASE_URL=http://127.0.0.1:$(E2E_PORT) $(PYTHON) -m pytest -p no:cacheprovider --log-file=e2e.log $(GTS_SPEC_DIR)/tests || (kill `cat .server.pid` 2>/dev/null; rm -f .server.pid; exit 1)
 	@echo "Stopping server..."
 	@kill `cat .server.pid` 2>/dev/null || true
 	@rm -f .server.pid

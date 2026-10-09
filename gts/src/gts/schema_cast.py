@@ -11,7 +11,7 @@ from referencing import Registry
 from .compatibility import UNKNOWN, dialects_differ
 from .gts import GtsID
 from .schema_dialect import effective_dialect
-from .schema_validation import validator_for
+from .schema_validation import check_schema_regexes, validator_for
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +395,11 @@ class GtsEntityCastResult:
         """Validate instance against schema, but allow const values to differ if both are GTS IDs."""
         # Create a modified schema that removes const constraints for GTS IDs
         modified_schema = GtsEntityCastResult._remove_gts_const_constraints(schema)
+        check_schema_regexes(
+            modified_schema,
+            dialect=inherited_dialect,
+            registry=resolver if isinstance(resolver, Registry) else None,
+        )
 
         validator_class = validator_for(
             modified_schema, inherited_dialect=inherited_dialect

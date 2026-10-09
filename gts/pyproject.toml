@@ -20,7 +20,9 @@ dependencies = [
   "pydantic>=2,<3",
   "uvicorn>=0.23,<1",
   "pyyaml>=6.0,<7",
-  "regex==2025.11.3",
+  # Pin RE2 syntax/limits. CPython 3.9 builds from source, requiring C++17
+  # and RE2/Abseil headers; 3.10-3.14 have wheels.
+  "google-re2==1.1.20251105",
   "eval_type_backport>=0.1,<0.3; python_version < '3.10'"
 ]
 

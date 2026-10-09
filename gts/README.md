@@ -2,7 +2,7 @@
 
 Python helpers and a reference HTTP service for the [Global Type System (GTS)](https://github.com/globaltypesystem/gts-spec). The package supports GTS identifier parsing, JSON Schema-backed validation, schema compatibility and derivation checks, traits, casting, queries, file loading, a CLI, and a FastAPI application.
 
-The package targets GTS specification v0.14.5 and requires Python 3.9 or later.
+The package targets GTS specification 0.15.0 and requires Python 3.9 or later. `google-re2` ships wheels for CPython 3.10-3.14; on Python 3.9 pip builds it from source, which needs a C++17 compiler and the RE2 and Abseil development headers.
 
 ## Installation
 
@@ -15,6 +15,7 @@ The package installs these runtime dependencies:
 - `jsonschema` for JSON Schema validation;
 - `referencing` for standards-aware `$ref` resolution during instance validation;
 - `jsonsubschema` for accepted-instance-set inclusion checks;
+- `google-re2` for regular expressions (see [Regular expressions](#regular-expressions));
 - `fastapi` and `uvicorn` for the HTTP server;
 - `PyYAML` for YAML input.
 
@@ -244,6 +245,17 @@ OP#8 compatibility has three string verdicts:
 - `unknown`: the inclusion engine could not prove the relation.
 
 `GtsEntityCastResult.to_dict()` returns `backward_compatibility`, `forward_compatibility`, and `full_compatibility` using those strings. Its boolean `is_*_compatible` fields are `True` only for `compatible`; they are `False` for both `incompatible` and `unknown`.
+
+The inclusion engine (`jsonsubschema`) does not use the safe profile's semantics, so it never sees a regular expression. Finite `const`/`enum` operands are checked with the safe validator. Otherwise a `pattern`, `patternProperties`, `propertyNames` or `format: "regex"` constraint, or a `not`, `anyOf` or `oneOf` containing a regular expression, is factored out only when the superset's constraint appears identically at the same plain location (`properties`, single-schema `items`, `allOf`) in the subset; `anyOf` and `oneOf` only without `unevaluatedProperties` or `unevaluatedItems`. Any other regex-bearing operand gives `unknown`, as does a schema with references when a regex appears anywhere in it. OP#12 rejects unprovable derivations, so a derived type must restate an inherited pattern unchanged.
+
+### Regular expressions
+
+`pattern`, `patternProperties` and `format: "regex"`, including trait, cast and compatibility validation, follow the GTS [safe regular-expression profile](https://github.com/GlobalTypeSystem/gts-spec/blob/main/README.md#1101-regular-expression-execution-safety) (spec §11.0.1, version 0.15). All of them go through `gts.safe_regex`.
+
+- **Engine:** [RE2](https://github.com/google/re2) through `google-re2` 1.1.20251105, default RE2 options with `never_capture=True` and a 16 MiB program limit (`MAX_MEM_BYTES`); no `re` fallback.
+- **Declared behavior:** reference for `digit`, `word` and `space`; no permitted deviation is used (`gts.safe_regex.DECLARED_BEHAVIOR`).
+- **Failures:** an operational failure raises `gts.schema_validation.RegexEvaluationError` and fails the whole validation.
+- **Unpaired surrogates** (no result defined by GTS): rejected in expressions; an input string with one raises `RegexEvaluationError`.
 
 ## HTTP server
 
