@@ -310,6 +310,16 @@ def merge_effective_property(prev: Any, nxt: Any) -> Any:
     if prev is None or not isinstance(prev, dict) or not isinstance(nxt, dict):
         return nxt
     merged = dict(nxt)
+    # Carry the earlier declaration's allOf conjuncts: a reference constraint
+    # nested in the inherited ``allOf`` would otherwise be lost when the later
+    # overlay redeclares the property with ordinary keywords, wrongly widening
+    # the effective scope. allOf is a conjunction, so order does not matter.
+    prev_all_of = prev.get("allOf")
+    if isinstance(prev_all_of, list):
+        existing = merged.get("allOf")
+        merged["allOf"] = list(prev_all_of) + (
+            list(existing) if isinstance(existing, list) else []
+        )
     for keyword in REF_KEYWORDS:
         if keyword not in prev:
             continue
@@ -331,21 +341,56 @@ def merge_effective_property(prev: Any, nxt: Any) -> Any:
     return merged
 
 
-def _effective_properties(schema: Any, depth: int = 0) -> dict[str, Any]:
-    """Property-name → effective property schema, folding allOf branches with
-    reference-aware merging so an inherited narrower scope is not widened."""
+def _effective_subschemas(schema: Any, depth: int = 0) -> dict[str, Any]:
+    """Effective child subschemas keyed by location, folding ``allOf`` branches
+    with reference-aware merging so an inherited narrower scope is not widened.
+
+    Covers the applicators that constrain *every* instance value at their
+    location — ``properties``, ``patternProperties``, ``items`` (single or
+    tuple), ``prefixItems``, ``additionalItems`` and ``additionalProperties`` —
+    so a reference keyword under any of them participates in the subset
+    comparison. Existential applicators (``contains``) are deliberately omitted:
+    narrowing them does not narrow the accepted-instance set.
+    """
     result: dict[str, Any] = {}
     if not isinstance(schema, dict) or depth >= _MAX_DEPTH:
         return result
+
+    def add(key: str, sub: Any) -> None:
+        if isinstance(sub, dict):
+            result[key] = merge_effective_property(result.get(key), sub)
+
     all_of = schema.get("allOf")
     if isinstance(all_of, list):
         for branch in all_of:
-            for name, prop in _effective_properties(branch, depth + 1).items():
-                result[name] = merge_effective_property(result.get(name), prop)
+            for key, sub in _effective_subschemas(branch, depth + 1).items():
+                add(key, sub)
+
     properties = schema.get("properties")
     if isinstance(properties, dict):
-        for name, prop in properties.items():
-            result[name] = merge_effective_property(result.get(name), prop)
+        for name, sub in properties.items():
+            add(f"properties/{name}", sub)
+
+    pattern_properties = schema.get("patternProperties")
+    if isinstance(pattern_properties, dict):
+        for pattern, sub in pattern_properties.items():
+            add(f"patternProperties/{pattern}", sub)
+
+    items = schema.get("items")
+    if isinstance(items, dict):
+        add("items", items)
+    elif isinstance(items, list):
+        for index, sub in enumerate(items):
+            add(f"items/{index}", sub)
+
+    prefix_items = schema.get("prefixItems")
+    if isinstance(prefix_items, list):
+        for index, sub in enumerate(prefix_items):
+            add(f"prefixItems/{index}", sub)
+
+    for keyword in ("additionalItems", "additionalProperties"):
+        add(keyword, schema.get(keyword))
+
     return result
 
 
@@ -391,11 +436,11 @@ def _schema_ref_relation(base: Any, derived: Any, depth: int) -> str:
     result = ref_scope_relation(base, derived)
     if result == EXCLUDED:
         return EXCLUDED
-    base_props = _effective_properties(base)
-    derived_props = _effective_properties(derived)
-    for name in set(base_props) | set(derived_props):
+    base_children = _effective_subschemas(base)
+    derived_children = _effective_subschemas(derived)
+    for key in set(base_children) | set(derived_children):
         child = _schema_ref_relation(
-            base_props.get(name, {}), derived_props.get(name, {}), depth + 1
+            base_children.get(key, {}), derived_children.get(key, {}), depth + 1
         )
         result = _combine(result, child)
         if result == EXCLUDED:
