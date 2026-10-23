@@ -26,6 +26,7 @@ agree with OP#4 point matching and pattern coverage.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Mapping
 from typing import Any
 
@@ -187,7 +188,21 @@ def _make_ref_keyword(keyword: str, selected_type_id: str | None):
     return _keyword
 
 
-_EXTENDED_FAMILIES: dict[str | None, Mapping[str, type]] = {}
+@functools.lru_cache(maxsize=256)
+def _ref_keyword_family(selected_type_id: str | None) -> Mapping[str, type]:
+    """Build (and cache) the safe validator family that evaluates the three GTS
+    reference keywords for the given selected leaf type.
+
+    The ``/$id`` operand is baked into the keyword handlers, so a distinct family
+    is needed per ``selected_type_id``. An LRU bound keeps the cache from growing
+    without limit on a long-running server that validates many distinct types.
+    """
+    return validator_family(
+        {
+            keyword: _make_ref_keyword(keyword, selected_type_id)
+            for keyword in REF_KEYWORDS
+        }
+    )
 
 
 def extended_validator_for(schema: Any, selected_type_id: str | None = None) -> type:
@@ -195,16 +210,7 @@ def extended_validator_for(schema: Any, selected_type_id: str | None = None) -> 
     extended so the three GTS reference keywords are evaluated as real keywords
     during structural validation (including inside combinators).
     """
-    family = _EXTENDED_FAMILIES.get(selected_type_id)
-    if family is None:
-        family = validator_family(
-            {
-                keyword: _make_ref_keyword(keyword, selected_type_id)
-                for keyword in REF_KEYWORDS
-            }
-        )
-        _EXTENDED_FAMILIES[selected_type_id] = family
-    return validator_for(schema, family=family)
+    return validator_for(schema, family=_ref_keyword_family(selected_type_id))
 
 
 def _without_x_gts_ref(schema: Any) -> Any:

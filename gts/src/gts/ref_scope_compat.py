@@ -38,6 +38,10 @@ UNKNOWN = "unknown"
 _MAX_DEPTH = 64
 _MIN_INSTANCE_SEGMENT_LEN = 10  # "a.a.a.a.v0"
 
+# Keywords whose values are literal data, never schemas: a keyword-shaped key
+# inside them is data, not a reference keyword (README §9.6.3).
+_LITERAL_KEYWORDS = frozenset({"const", "enum", "default", "examples"})
+
 # refScope kinds.
 _TOP = "top"
 _ATOM = "atom"
@@ -399,6 +403,38 @@ def _schema_ref_relation(base: Any, derived: Any, depth: int) -> str:
     return result
 
 
+def _mentions_ref_keyword(node: Any, want_self_id: bool = False) -> bool:
+    """Whether ``node`` declares any reference keyword (or, when
+    ``want_self_id``, specifically a ``/$id`` operand). Keyword-shaped keys in
+    literal data (``const``/``enum``/``default``/``examples``) are skipped, as
+    they are not keywords."""
+    if isinstance(node, dict):
+        for keyword in REF_KEYWORDS:
+            if keyword in node and (not want_self_id or node[keyword] == SELF_ID_REF):
+                return True
+        return any(
+            _mentions_ref_keyword(value, want_self_id)
+            for key, value in node.items()
+            if key not in _LITERAL_KEYWORDS
+        )
+    if isinstance(node, list):
+        return any(_mentions_ref_keyword(item, want_self_id) for item in node)
+    return False
+
+
+def _with_resolved_self(schema: Any, self_id: str | None) -> Any:
+    """``schema`` with every ``/$id`` reference operand resolved to ``self_id``.
+
+    Returns the input unchanged (no copy) when there is nothing to resolve, so
+    the common case avoids a deep copy of the whole schema.
+    """
+    if self_id is None or not _mentions_ref_keyword(schema, want_self_id=True):
+        return schema
+    copied = copy.deepcopy(schema)
+    resolve_self_ref_operands(copied, self_id)
+    return copied
+
+
 def schema_ref_relation(
     base: Any,
     derived: Any,
@@ -408,12 +444,13 @@ def schema_ref_relation(
     """Three-valued reference-dimension relation ``Valid(derived) ⊆ Valid(base)``
     over two resolved schemas, resolving each schema's ``/$id`` to its own type.
     """
-    base_copy = copy.deepcopy(base)
-    derived_copy = copy.deepcopy(derived)
-    base_id = base_self_id or _self_id_of(base)
-    derived_id = derived_self_id or _self_id_of(derived)
-    if base_id:
-        resolve_self_ref_operands(base_copy, base_id)
-    if derived_id:
-        resolve_self_ref_operands(derived_copy, derived_id)
-    return _schema_ref_relation(base_copy, derived_copy, 0)
+    # Only the base's reference keywords restrict: a derived-only constraint can
+    # only narrow, and a schema with no reference keyword imposes no restriction
+    # (README §9.6.1). Scanning for a keyword is far cheaper than the deep copy
+    # and full-tree scope walk the comparison would otherwise do on every OP#8
+    # and OP#12 check, so bail out early for the common keyword-free schema.
+    if not _mentions_ref_keyword(base):
+        return INCLUDED
+    base_eval = _with_resolved_self(base, base_self_id or _self_id_of(base))
+    derived_eval = _with_resolved_self(derived, derived_self_id or _self_id_of(derived))
+    return _schema_ref_relation(base_eval, derived_eval, 0)
