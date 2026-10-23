@@ -255,30 +255,34 @@ class TestValidateSchemaRefs:
 
 
 class TestSchemaDependencies:
-    def test_ignores_x_gts_ref_in_annotation_data(self):
+    def test_ignores_ref_keyword_in_annotation_data(self):
         store = GtsStore(reader=None)
         assert (
             list(
                 store._schema_dependencies(
-                    {"const": {"x-gts-ref": "gts.x.test._.missing.v1~"}}
+                    {"const": {"x-gts-type-ref": "gts.x.test._.missing.v1~"}}
                 )
             )
             == []
         )
 
-    def test_finds_constraint_under_property_named_x_gts_ref(self):
+    def test_finds_constraint_under_property_named_like_keyword(self):
         store = GtsStore(reader=None)
         assert list(
             store._schema_dependencies(
-                {"properties": {"x-gts-ref": {"x-gts-ref": "gts.x.test._.missing.v1~"}}}
+                {
+                    "properties": {
+                        "x-gts-type-ref": {"x-gts-type-ref": "gts.x.test._.missing.v1~"}
+                    }
+                }
             )
         ) == [("gts.x.test._.missing.v1~", True)]
 
-    def test_unsupported_x_gts_ref_pointer_is_not_a_dependency(self):
+    def test_unsupported_ref_pointer_is_not_a_dependency(self):
         store = GtsStore(reader=None)
         schema = {
             "target": "gts.x.test._.target.v1~",
-            "properties": {"ref": {"x-gts-ref": "/target"}},
+            "properties": {"ref": {"x-gts-type-ref": "/target"}},
         }
         assert list(store._schema_dependencies(schema)) == []
 
@@ -342,11 +346,11 @@ class TestValidateSchemaXGtsRefs:
         with pytest.raises(ValueError, match="is not a schema"):
             store._validate_schema_x_gts_refs("gts.x.test._.foo.v1~")
 
-    def test_invalid_x_gts_ref_raises(self):
-        schema = _schema_entity("gts.x.test._.foo.v1~", {"x-gts-ref": "notgts.*"})
+    def test_invalid_ref_operand_raises(self):
+        schema = _schema_entity("gts.x.test._.foo.v1~", {"x-gts-type-ref": "notgts.*"})
         store = GtsStore(reader=None)
         store.register(schema)
-        with pytest.raises(Exception, match="x-gts-ref validation failed"):
+        with pytest.raises(Exception, match="validation failed"):
             store._validate_schema_x_gts_refs("gts.x.test._.foo.v1~")
 
     def test_basic_validation_rejects_unsupported_pointer(self):
@@ -355,14 +359,14 @@ class TestValidateSchemaXGtsRefs:
             {
                 "x-gts-traits-schema": {
                     "properties": {
-                        "ref": {"x-gts-ref": "/x-gts-traits-schema/missingTarget"}
+                        "ref": {"x-gts-type-ref": "/x-gts-traits-schema/missingTarget"}
                     }
                 }
             },
         )
         store = GtsStore(reader=None)
         store.register(schema)
-        with pytest.raises(Exception, match="must be a GTS identifier"):
+        with pytest.raises(Exception, match="expected a GTS identifier"):
             store.validate_schema_basic("gts.x.test._.foo.v1~")
 
 

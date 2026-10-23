@@ -48,7 +48,12 @@ from .schema_validation import (
     check_schema_regexes,
     iter_schema_nodes,
 )
-from .x_gts_ref import XGtsRefValidator, _without_x_gts_ref, extended_validator_for
+from .x_gts_ref import (
+    ENTITY_REF_KEYWORDS,
+    REF_KEYWORDS,
+    XGtsRefValidator,
+    extended_validator_for,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -481,8 +486,12 @@ class GtsStore:
                     "2019-09": DRAFT201909,
                     "2020-12": DRAFT202012,
                 }[dialect]
+                # Keep the GTS reference keywords: when a derived type imports a
+                # base via ``$ref``, the extended validator must still evaluate
+                # the base's reference constraints (so an inherited ``/$id``
+                # resolves to the leaf being validated, ADR-0007/0008).
                 resource = Resource.from_contents(
-                    _without_x_gts_ref(entity.content),
+                    entity.content,
                     default_specification=specification,
                 )
                 registry = registry.with_resource(with_scheme(entity_id), resource)
@@ -690,7 +699,7 @@ class GtsStore:
             "x-gts-traits",
             "x-gts-traits-schema",
         }
-        supported_keywords = top_level_keywords | {"x-gts-ref"}
+        supported_keywords = top_level_keywords | set(REF_KEYWORDS)
 
         # Validate x-gts-final
         final_val = content.get("x-gts-final")
@@ -1268,15 +1277,19 @@ class GtsStore:
 
             if not include_gts_refs:
                 continue
-            x_gts_ref = x_gts_ref_validator.resolve_ref_pattern(
-                subschema.get("x-gts-ref"), selected_type_id
-            )
-            if (
-                isinstance(x_gts_ref, str)
-                and x_gts_ref.startswith(GTS_PREFIX)
-                and "*" not in x_gts_ref
-            ):
-                yield x_gts_ref, True
+            # Only the entity-reference keywords establish registry dependencies;
+            # x-gts-pattern-ref never consults the registry (ADR-0007). A concrete
+            # operand names a type dependency (the referenced type family root).
+            for keyword in ENTITY_REF_KEYWORDS:
+                x_gts_ref = x_gts_ref_validator.resolve_ref_pattern(
+                    subschema.get(keyword), selected_type_id
+                )
+                if (
+                    isinstance(x_gts_ref, str)
+                    and x_gts_ref.startswith(GTS_PREFIX)
+                    and "*" not in x_gts_ref
+                ):
+                    yield x_gts_ref, True
 
     def _validate_entity_transitive(
         self,
@@ -1713,14 +1726,9 @@ class GtsStore:
             True if entity ID matches the pattern
         """
         if is_wildcard and wildcard_pattern:
-            matched = entity_id.wildcard_match(wildcard_pattern)
-            if not matched:
-                return False
-            if base_pattern.endswith("~*"):
-                base_depth = max(0, len(wildcard_pattern.gts_id_segments) - 1)
-                if len(entity_id.gts_id_segments) <= base_depth:
-                    return False
-            return True
+            # §10 matching (shared with OP#4) fully decides selection, including
+            # that a `~*` chain wildcard also selects the base type itself.
+            return entity_id.wildcard_match(wildcard_pattern)
 
         # For non-wildcard patterns, use wildcard_match to support version flexibility
         # This allows patterns like "gts.x.test.v1~" to match "gts.x.test.v1.0~"

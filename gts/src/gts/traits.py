@@ -438,11 +438,11 @@ def _validate_trait_values(
     for err in xref.validate_schema_ref_existence(
         effective_traits_schema, selected_type_id=selected_type_id
     ):
-        errors.append(f"trait x-gts-ref: {err.reason}")
+        errors.append(f"trait reference: {err.reason}")
     for err in xref.validate_instance(
         effective_traits,
         effective_traits_schema,
         selected_type_id=selected_type_id,
     ):
-        errors.append(f"trait x-gts-ref: {err.reason}")
+        errors.append(f"trait reference: {err.reason}")
     return errors

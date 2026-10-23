@@ -13,7 +13,9 @@ from .files_reader import DEFAULT_EXCLUDE_LIST
 from .gts import GtsID
 from .store import GtsStore
 
-_X_GTS_REF_KEYWORD = "x-gts-ref"
+# Any GTS extension keyword (x-gts-type-ref, x-gts-pattern-ref, x-gts-final, ...)
+# marks a file as GTS-related even when it carries no gts. identifier.
+_X_GTS_KEYWORD_PREFIX = "x-gts-"
 
 
 @dataclass
@@ -131,7 +133,9 @@ class GtsJsonValidator:
     @staticmethod
     def _is_gts_marker(text: str) -> bool:
         return (
-            GTS_PREFIX in text or GTS_URI_PREFIX in text or _X_GTS_REF_KEYWORD in text
+            GTS_PREFIX in text
+            or GTS_URI_PREFIX in text
+            or _X_GTS_KEYWORD_PREFIX in text
         )
 
     def _read_file(self, file_path: Path) -> None:

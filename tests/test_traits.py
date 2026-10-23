@@ -278,7 +278,7 @@ class TestBuildEffectiveTraits:
         effective = build_effective_traits([schema], {}, DRAFT7)
         assert effective.validate(check_unresolved=False) == []
 
-    def test_abstract_checks_x_gts_ref_constraint_type_existence(self):
+    def test_abstract_checks_ref_constraint_type_existence(self):
         class FakeStore:
             def get(self, value):
                 return None
@@ -286,15 +286,14 @@ class TestBuildEffectiveTraits:
         schema = {
             "type": "object",
             "properties": {
-                "ref": {"type": "string", "x-gts-ref": "gts.x.test._.foo.v1~"}
+                "ref": {"type": "string", "x-gts-type-ref": "gts.x.test._.foo.v1~"}
             },
         }
         errors = build_effective_traits([schema], {}, DRAFT7).validate(
             check_unresolved=False, reference_store=FakeStore()
         )
         assert any(
-            "constraint type 'gts.x.test._.foo.v1~' is not registered" in e
-            for e in errors
+            "constraint 'gts.x.test._.foo.v1~' is not registered" in e for e in errors
         )
 
     def test_incompatible_trait_schema_chain_flagged(self):
@@ -336,11 +335,11 @@ class TestBuildEffectiveTraits:
             == "https://json-schema.org/draft/2020-12/schema"
         )
 
-    def test_x_gts_ref_errors_prefixed(self):
+    def test_ref_errors_prefixed(self):
         schema = {
             "type": "object",
-            "properties": {"ref": {"type": "string", "x-gts-ref": "not-valid"}},
+            "properties": {"ref": {"type": "string", "x-gts-type-ref": "not-valid"}},
         }
         effective = build_effective_traits([schema], {"ref": "also-not-valid"}, DRAFT7)
         errors = effective.validate(check_unresolved=True)
-        assert any(e.startswith("trait x-gts-ref:") for e in errors)
+        assert any(e.startswith("trait reference:") for e in errors)
