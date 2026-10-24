@@ -90,7 +90,10 @@ gts parse-id --gts-id 'gts.example.demo._.event.v1~'
 gts match-id-pattern --candidate 'gts.example.demo._.event.v1~' --pattern 'gts.example.*'
 gts uuid --gts-id 'gts.example.demo._.event.v1~'
 
-# Operations with loaded entities
+# Operations with loaded entities.
+# Placeholders: point --path at a directory holding your GTS schemas and
+# instances, and substitute their IDs (no ./examples directory ships with
+# this repository; the gts-spec submodule's .gts-spec/examples has samples).
 gts --path ./examples validate-instance --gts-id 'gts.example.demo._.event.v1~example.demo._.created.v1'
 gts --path ./examples validate-type-schema --gts-id 'gts.example.demo._.event.v1.1~'
 gts --path ./examples validate-entity --gts-id 'gts.example.demo._.event.v1~'

@@ -320,6 +320,20 @@ def merge_effective_property(prev: Any, nxt: Any) -> Any:
         merged["allOf"] = list(prev_all_of) + (
             list(existing) if isinstance(existing, list) else []
         )
+    # Likewise carry the earlier declaration's reference-bearing anyOf/oneOf/not
+    # as allOf conjuncts: innermost-wins would drop them when the overlay
+    # redeclares (or omits) the same applicator, widening the inherited scope.
+    for applicator in ("anyOf", "oneOf", "not"):
+        prev_value = prev.get(applicator)
+        if prev_value is None or merged.get(applicator) == prev_value:
+            continue
+        if not _mentions_ref_keyword(prev_value):
+            continue
+        existing = merged.get("allOf")
+        merged["allOf"] = [
+            *(existing if isinstance(existing, list) else []),
+            {applicator: prev_value},
+        ]
     for keyword in REF_KEYWORDS:
         if keyword not in prev:
             continue
@@ -430,6 +444,30 @@ def _combine(current: str, child: str) -> str:
     return current
 
 
+def _array_tail(children: dict[str, Any]) -> Any:
+    """The schema governing array positions past the explicit tuple entries: the
+    Draft-07 ``additionalItems`` for a tuple ``items`` array, otherwise ``items``
+    (a single ``items`` schema, or the 2020-12 tail after ``prefixItems``)."""
+    if any(key.startswith("items/") for key in children):
+        return children.get("additionalItems", {})
+    return children.get("items", {})
+
+
+def _child_at(children: dict[str, Any], key: str) -> Any:
+    """The effective subschema at ``key``. An array location the schema does not
+    declare explicitly is governed by its tail schema, so each array index is
+    compared against the constraint that actually applies there.
+    ``additionalItems`` always resolves to the tail, as it is ignored outside
+    the tuple form."""
+    if key == "additionalItems":
+        return _array_tail(children)
+    if key in children:
+        return children[key]
+    if key == "items" or key.startswith(("items/", "prefixItems/")):
+        return _array_tail(children)
+    return {}
+
+
 def _schema_ref_relation(base: Any, derived: Any, depth: int) -> str:
     if depth >= _MAX_DEPTH:
         return UNKNOWN
@@ -440,7 +478,7 @@ def _schema_ref_relation(base: Any, derived: Any, depth: int) -> str:
     derived_children = _effective_subschemas(derived)
     for key in set(base_children) | set(derived_children):
         child = _schema_ref_relation(
-            base_children.get(key, {}), derived_children.get(key, {}), depth + 1
+            _child_at(base_children, key), _child_at(derived_children, key), depth + 1
         )
         result = _combine(result, child)
         if result == EXCLUDED:
