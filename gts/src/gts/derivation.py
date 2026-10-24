@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from . import ref_scope_compat
 from .compatibility import boolean_schema_value, check_accepted_set_inclusion
 
 MAX_RECURSION_DEPTH = 64
@@ -38,6 +39,19 @@ def validate_derivation_compatibility(
             base_schema, derived_schema, base_id, derived_id
         )
     )
+    # GTS reference scopes (README §9.6.1): the derived scope must be provably
+    # included in the base's. Admission fails closed, so an unknown relation is
+    # rejected too.
+    if (
+        ref_scope_compat.schema_ref_relation(
+            base_schema, derived_schema, base_id, derived_id
+        )
+        != ref_scope_compat.INCLUDED
+    ):
+        errors.append(
+            f"derived schema '{derived_id}' is not included in base '{base_id}': "
+            "a GTS reference constraint is not included in the base constraint"
+        )
     return errors
 
 

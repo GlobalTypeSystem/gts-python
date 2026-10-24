@@ -1,25 +1,40 @@
-"""
-x-gts-ref validation support for GTS schemas (optimized version).
+"""GTS entity- and pattern-reference keyword validation (README §9.6; ADR-0007/0008).
 
-This module implements validation for the x-gts-ref extension as specified
-in the GTS specification section 9.5.
+This module validates the three GTS reference keywords:
 
-Key optimizations:
-1. Resolve local JSON Schema $ref pointers during traversal
-2. Consolidate duplicate validation logic
-3. Simplify recursive traversal with a generic walker
+- ``x-gts-type-ref``: the candidate MUST be a GTS Type Identifier selected by
+  the operand.
+- ``x-gts-instance-ref``: the candidate MUST be a GTS Instance Identifier
+  selected by the operand.
+- ``x-gts-pattern-ref``: the candidate MUST be a GTS identifier *pattern* whose
+  whole selection set is covered by the operand.
+
+The former kind-blind ``x-gts-ref`` keyword was removed in GTS 0.16; it is now
+handled like any other unknown ``x-gts-*`` keyword (rejected on schema
+validation).
+
+Operand (schema) validity and candidate (value) validity are two concerns: an
+invalid operand is a schema error (reported by :meth:`XGtsRefValidator.validate_schema`
+and not invertible by ``not``); a value that does not satisfy the constraint is
+an ordinary validation failure that composition keywords may invert. Registry
+lookup applies only to the two entity-reference keywords; ``x-gts-pattern-ref``
+never consults the registry.
+
+Matching and coverage come from :mod:`gts.gts_id_pattern` (README §10), so they
+agree with OP#4 point matching and pattern coverage.
 """
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Mapping
 from typing import Any
 
 from jsonschema.exceptions import ValidationError
 
+from . import gts_id_pattern as idp
 from ._json_pointer import resolve as resolve_json_pointer
 from ._naming import GTS_PREFIX, strip_scheme
-from .gts import GtsID, GtsWildcard
 from .gts_ref_validation import GtsRefValidationMode
 from .schema_dialect import effective_dialect
 from .schema_validation import (
@@ -31,103 +46,183 @@ from .schema_validation import (
     validator_for,
 )
 
-X_GTS_REF_SELF = "/$id"
+X_GTS_TYPE_REF = "x-gts-type-ref"
+X_GTS_INSTANCE_REF = "x-gts-instance-ref"
+X_GTS_PATTERN_REF = "x-gts-pattern-ref"
+
+#: The reserved ``/$id`` operand: the leaf GTS Type Schema selected for
+#: validation, even where the constraint is inherited (README §9.6.1).
+SELF_ID_REF = "/$id"
+X_GTS_REF_SELF = SELF_ID_REF  # backward-compatible alias
+
+#: Entity-reference keywords (kind-constrained, registry-aware).
+ENTITY_REF_KEYWORDS = (X_GTS_TYPE_REF, X_GTS_INSTANCE_REF)
+#: All three GTS reference keywords, in a stable order.
+REF_KEYWORDS = (X_GTS_TYPE_REF, X_GTS_INSTANCE_REF, X_GTS_PATTERN_REF)
 
 
-def _gts_pattern_violation(value: str, pattern: str) -> str | None:
-    """Return why the string ``value`` does not satisfy ``pattern``, or None.
+def _noun(keyword: str) -> str:
+    return (
+        "GTS Type Identifier"
+        if keyword == X_GTS_TYPE_REF
+        else "GTS Instance Identifier"
+    )
 
-    Pure pattern matching (concrete id, type prefix, or single trailing
-    wildcard). Registry existence and the ``/$id`` self-reference are NOT decided
-    here — they need the store and the selected-type context, which the
-    :class:`XGtsRefValidator` walker owns. This helper is shared by that walker
-    and by the structural ``x-gts-ref`` keyword so both agree on matching.
+
+def _other_noun(keyword: str) -> str:
+    return (
+        "GTS Instance Identifier"
+        if keyword == X_GTS_TYPE_REF
+        else "GTS Type Identifier"
+    )
+
+
+class _OperandError(Exception):
+    """An operand (schema value) of a reference keyword is not usable."""
+
+
+def resolve_ref_operand(
+    keyword: str, operand: Any, selected_type_id: str | None
+) -> tuple[idp.ParsedPattern, str]:
+    """Resolve a keyword operand to its pattern and spelling (``/$id`` resolved).
+
+    Raises :class:`_OperandError` when the operand is a schema error.
     """
-    if not GtsID.is_valid(value):
-        return f"Value '{value}' is not a valid GTS identifier"
-    if pattern == GTS_PREFIX + "*":
-        return None
-    if pattern.endswith("*"):
-        if not value.startswith(pattern[:-1]):
-            return f"Value '{value}' does not match pattern '{pattern}'"
-        return None
-    # Prefix matching alone ignores segment boundaries: an exact constraint such
-    # as "gts.a.b.c.d.v1~x.y.z.w.v1" would otherwise also accept "…w.v12"/"…w.v1.5".
-    # Type patterns (ending with '~') admit derived identifiers; any other (exact)
-    # pattern requires a full match or a '~' boundary right after the pattern.
-    if not value.startswith(pattern) or not (
-        len(value) == len(pattern)
-        or pattern.endswith("~")
-        or value[len(pattern)] == "~"
+    if not isinstance(operand, str):
+        raise _OperandError(
+            f"{keyword} operand must be a string, got {type(operand).__name__}"
+        )
+
+    if operand == SELF_ID_REF:
+        if not selected_type_id:
+            raise _OperandError(
+                f"{keyword} operand '{SELF_ID_REF}' has no selected GTS Type "
+                "Schema '$id' to resolve to"
+            )
+        try:
+            parsed = idp.parse_concrete(selected_type_id)
+        except idp.InvalidPattern:
+            parsed = None  # type: ignore[assignment]
+        if parsed is None or not parsed.is_type():
+            raise _OperandError(
+                f"{keyword} operand '{SELF_ID_REF}' resolves to '{selected_type_id}', "
+                "which is not a concrete GTS Type Identifier"
+            )
+        return parsed, selected_type_id
+
+    try:
+        pattern = idp.parse_pattern(operand)
+    except idp.InvalidPattern as error:
+        raise _OperandError(
+            f"{keyword} operand '{operand}': {error}; expected a GTS identifier, "
+            f"a wildcard pattern or '{SELF_ID_REF}'"
+        ) from error
+
+    # x-gts-type-ref rejects a concrete Instance ID operand: it selects no types.
+    if (
+        keyword == X_GTS_TYPE_REF
+        and not idp.has_wildcard(operand)
+        and not idp.is_type_id(operand)
     ):
-        return f"Value '{value}' does not match pattern '{pattern}'"
+        raise _OperandError(
+            f"{keyword} operand '{operand}' is a GTS Instance Identifier, "
+            "which selects no GTS Type Identifiers"
+        )
+    return pattern, operand
+
+
+def ref_candidate_violation(
+    keyword: str, value: Any, operand: idp.ParsedPattern, spelling: str
+) -> str | None:
+    """Return why ``value`` violates the resolved reference constraint, or None.
+
+    Pure structural check (kind + matching, or pattern coverage); no registry
+    lookup.
+    """
+    if not isinstance(value, str):
+        return f"Value must be a string, got {type(value).__name__}"
+
+    if keyword == X_GTS_PATTERN_REF:
+        try:
+            value_pattern = idp.parse_pattern(value)
+        except idp.InvalidPattern as error:
+            return f"'{value}' is not a valid GTS identifier pattern: {error}"
+        if not idp.covers(operand, value_pattern):
+            return f"'{value}' selects GTS identifiers outside '{spelling}'"
+        return None
+
+    if idp.has_wildcard(value) or value.strip() != value:
+        return f"Value '{value}' is not a valid GTS identifier"
+    try:
+        candidate = idp.parse_concrete(value)
+    except idp.InvalidPattern:
+        return f"Value '{value}' is not a valid GTS identifier"
+    if (keyword == X_GTS_TYPE_REF) != candidate.is_type():
+        return (
+            f"Value '{value}' is a {_other_noun(keyword)}, but {keyword} "
+            f"requires a {_noun(keyword)}"
+        )
+    if not idp.matches_pattern(candidate, operand):
+        return f"Value '{value}' does not match pattern '{spelling}'"
     return None
 
 
-def _make_x_gts_ref_keyword(selected_type_id: str | None):
-    """Build a ``jsonschema`` keyword handler that makes ``x-gts-ref`` a
-    first-class assertion, so ``oneOf``/``anyOf``/``allOf`` resolve correctly:
-    two branches that differ only by ``x-gts-ref`` are genuinely different
-    schemas rather than identical match-all schemas. This is the same design
-    gts-go and gts-rust use (a registered keyword/vocabulary) and removes the
-    need to strip x-gts-ref and rewrite ``oneOf``→``anyOf``.
-
-    ``selected_type_id`` (the type being validated) lets the ``/$id``
-    self-reference resolve here so a ``/$id`` branch matches only that type
-    instead of matching unconditionally; without it, ``/$id`` is deferred to
-    XGtsRefValidator. Registry existence always stays with XGtsRefValidator.
+def _make_ref_keyword(keyword: str, selected_type_id: str | None):
+    """Build a ``jsonschema`` keyword handler so the reference keyword is a
+    first-class assertion (``oneOf``/``anyOf``/``allOf``/``not`` resolve
+    correctly). ``selected_type_id`` lets ``/$id`` resolve here; an unresolvable
+    operand is deferred (no error) and caught by :meth:`XGtsRefValidator.validate_schema`.
     """
 
-    def _keyword(validator, ref_pattern, instance, schema):
-        if not isinstance(ref_pattern, str):
-            return
+    def _keyword(validator, operand, instance, schema):
         if not isinstance(instance, str):
             return
-        pattern = ref_pattern
-        if ref_pattern == X_GTS_REF_SELF:
-            if not selected_type_id:
-                return
-            pattern = selected_type_id
-        reason = _gts_pattern_violation(instance, strip_scheme(pattern))
+        try:
+            pattern, spelling = resolve_ref_operand(keyword, operand, selected_type_id)
+        except _OperandError:
+            return
+        reason = ref_candidate_violation(keyword, instance, pattern, spelling)
         if reason is not None:
             yield ValidationError(reason)
 
     return _keyword
 
 
-# Backwards-compatible symbol: the /$id-deferring keyword (no selected type).
-_x_gts_ref_keyword = _make_x_gts_ref_keyword(None)
+@functools.lru_cache(maxsize=256)
+def _ref_keyword_family(selected_type_id: str | None) -> Mapping[str, type]:
+    """Build (and cache) the safe validator family that evaluates the three GTS
+    reference keywords for the given selected leaf type.
 
-
-_EXTENDED_FAMILIES: dict[str | None, Mapping[str, type]] = {}
+    The ``/$id`` operand is baked into the keyword handlers, so a distinct family
+    is needed per ``selected_type_id``. An LRU bound keeps the cache from growing
+    without limit on a long-running server that validates many distinct types.
+    """
+    return validator_family(
+        {
+            keyword: _make_ref_keyword(keyword, selected_type_id)
+            for keyword in REF_KEYWORDS
+        }
+    )
 
 
 def extended_validator_for(schema: Any, selected_type_id: str | None = None) -> type:
     """Return the ``jsonschema`` validator class for ``schema``'s dialect,
-    extended so ``x-gts-ref`` is evaluated as a real keyword during structural
-    validation (including inside combinators). ``selected_type_id`` is threaded
-    into the keyword so ``/$id`` resolves during combinator resolution.
-
-    The safe family preserves regex and ``x-gts-ref`` keywords across ``$schema`` changes."""
-    family = _EXTENDED_FAMILIES.get(selected_type_id)
-    if family is None:
-        family = validator_family(
-            {"x-gts-ref": _make_x_gts_ref_keyword(selected_type_id)}
-        )
-        _EXTENDED_FAMILIES[selected_type_id] = family
-    return validator_for(schema, family=family)
+    extended so the three GTS reference keywords are evaluated as real keywords
+    during structural validation (including inside combinators).
+    """
+    return validator_for(schema, family=_ref_keyword_family(selected_type_id))
 
 
 def _without_x_gts_ref(schema: Any) -> Any:
-    # Plain removal of x-gts-ref for the few places that deliberately need the
-    # bare structural shape: the walker's per-branch structural check
-    # (_is_structurally_valid) and the $ref reference registry. Structural
-    # instance validation does NOT use this — it uses extended_validator_for so
-    # the engine evaluates x-gts-ref natively (see _x_gts_ref_keyword).
+    """Remove the GTS reference keywords for the few places that need the bare
+    structural shape (per-branch structural checks and the ``$ref`` registry)."""
+
     def strip(node: Any) -> Any:
         if not isinstance(node, dict):
             return node
-        stripped = {key: value for key, value in node.items() if key != "x-gts-ref"}
+        stripped = {
+            key: value for key, value in node.items() if key not in REF_KEYWORDS
+        }
         for keyword in ("oneOf", "anyOf", "allOf"):
             branches = stripped.get(keyword)
             if (
@@ -165,11 +260,11 @@ def _is_structurally_valid(instance: Any, schema: Any, dialect: str) -> bool:
 
 
 class XGtsRefValidationError(Exception):
-    """Exception raised when x-gts-ref validation fails."""
+    """Exception raised when GTS reference validation fails."""
 
     def __init__(self, field_path: str, value: Any, ref_pattern: str, reason: str):
         super().__init__(
-            f"x-gts-ref validation failed for field '{field_path}': {reason}"
+            f"GTS reference validation failed for field '{field_path}': {reason}"
         )
         self.field_path = field_path
         self.value = value
@@ -178,7 +273,7 @@ class XGtsRefValidationError(Exception):
 
 
 class XGtsRefValidator:
-    """Validator for x-gts-ref constraints in GTS schemas."""
+    """Validator for the GTS reference keywords in GTS schemas."""
 
     def __init__(
         self,
@@ -206,7 +301,7 @@ class XGtsRefValidator:
 
     @staticmethod
     def is_self_reference(value: Any) -> bool:
-        return value == X_GTS_REF_SELF
+        return value == SELF_ID_REF
 
     @staticmethod
     def selected_type_id(
@@ -222,17 +317,7 @@ class XGtsRefValidator:
         instance_path: str = "",
         selected_type_id: str | None = None,
     ) -> list[XGtsRefValidationError]:
-        """
-        Validate an instance against x-gts-ref constraints in schema.
-
-        Args:
-            instance: The data instance to validate
-            schema: The JSON schema with x-gts-ref extensions
-            instance_path: Current path in instance (for error reporting)
-
-        Returns:
-            List of validation errors (empty if valid)
-        """
+        """Validate an instance against the reference constraints in ``schema``."""
         errors: list[XGtsRefValidationError] = []
         dialect = effective_dialect(schema, self.inherited_dialect)
         selected_type_id = self.selected_type_id(schema, selected_type_id)
@@ -243,7 +328,6 @@ class XGtsRefValidator:
             return resolve_json_pointer(schema, ref, default=None)
 
         def visit_instance(inst, sch, path, errs, refs=None):
-            """Visit instance nodes and validate x-gts-ref constraints."""
             if not isinstance(sch, dict):
                 return
 
@@ -254,12 +338,14 @@ class XGtsRefValidator:
                 if target is not None:
                     visit_instance(inst, target, path, errs, refs | {ref})
 
-            if "x-gts-ref" in sch and isinstance(inst, str):
-                error = self._validate_ref_value(
-                    inst, sch["x-gts-ref"], path, selected_type_id
-                )
-                if error:
-                    errs.append(error)
+            if isinstance(inst, str):
+                for keyword in REF_KEYWORDS:
+                    if keyword in sch:
+                        error = self._validate_ref_value(
+                            keyword, inst, sch[keyword], path, selected_type_id
+                        )
+                        if error:
+                            errs.append(error)
 
             one_of = sch.get("oneOf")
             if isinstance(one_of, list):
@@ -372,15 +458,26 @@ class XGtsRefValidator:
     def validate_schema(
         self, schema: dict[str, Any], schema_path: str = ""
     ) -> list[XGtsRefValidationError]:
-        """Validate x-gts-ref fields in a schema definition."""
+        """Validate the reference-keyword operands in a schema definition."""
         errors = []
-        for subschema, path in iter_schema_nodes(schema, schema_path):
-            if "x-gts-ref" not in subschema:
-                continue
-            ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
-            error = self._validate_ref_pattern(subschema["x-gts-ref"], ref_path)
-            if error:
-                errors.append(error)
+        selected_type_id = self.selected_type_id(schema, None)
+        for subschema, path in iter_schema_nodes(schema):
+            for keyword in REF_KEYWORDS:
+                if keyword not in subschema:
+                    continue
+                ref_path = f"{path}/{keyword}" if path else keyword
+                try:
+                    resolve_ref_operand(keyword, subschema[keyword], selected_type_id)
+                except _OperandError as error:
+                    operand = subschema[keyword]
+                    errors.append(
+                        XGtsRefValidationError(
+                            ref_path,
+                            operand,
+                            operand if isinstance(operand, str) else "",
+                            str(error),
+                        )
+                    )
         return errors
 
     def validate_schema_ref_existence(
@@ -389,52 +486,54 @@ class XGtsRefValidator:
         schema_path: str = "",
         selected_type_id: str | None = None,
     ) -> list[XGtsRefValidationError]:
+        """Check that each entity-reference operand resolves to a registered
+        (and, under any-valid, valid) entity. Pattern-reference operands are
+        never looked up (ADR-0007)."""
         if self.store is None or self.mode == GtsRefValidationMode.NONE:
             return []
         store = self.store
         selected_type_id = self.selected_type_id(schema, selected_type_id)
 
-        def matches(pattern: str) -> list[str]:
-            wildcard = GtsWildcard(pattern)
-            result = []
+        def matches(pattern: str) -> bool:
             for entity_id, _ in store.items():  # noqa: PERF102 - generic store protocol
-                try:
-                    if GtsID(entity_id).wildcard_match(wildcard):
-                        result.append(entity_id)
-                except ValueError:
-                    continue
-            return result
+                matched, error = idp.match(entity_id, pattern)
+                if error is None and matched:
+                    return True
+            return False
 
         errors: list[XGtsRefValidationError] = []
         for subschema, path in iter_schema_nodes(schema, schema_path):
-            ref_pattern = subschema.get("x-gts-ref")
-            resolved = self.resolve_ref_pattern(ref_pattern, selected_type_id)
-            if not isinstance(resolved, str) or not resolved.startswith(GTS_PREFIX):
-                continue
-            ref_path = f"{path}/x-gts-ref" if path else "x-gts-ref"
-            if "*" in resolved:
-                if matches(resolved):
-                    self.referenced_wildcard_patterns.add(resolved)
-                else:
+            for keyword in ENTITY_REF_KEYWORDS:
+                operand = subschema.get(keyword)
+                if not isinstance(operand, str):
+                    continue
+                resolved = selected_type_id if operand == SELF_ID_REF else operand
+                if not isinstance(resolved, str) or not resolved.startswith(GTS_PREFIX):
+                    continue
+                ref_path = f"{path}/{keyword}" if path else keyword
+                if "*" in resolved:
+                    if matches(resolved):
+                        self.referenced_wildcard_patterns.add(resolved)
+                    else:
+                        errors.append(
+                            XGtsRefValidationError(
+                                ref_path,
+                                operand,
+                                resolved,
+                                f"{keyword} wildcard constraint '{resolved}' has no registered match",
+                            )
+                        )
+                elif store.get(resolved) is None:
                     errors.append(
                         XGtsRefValidationError(
                             ref_path,
-                            ref_pattern,
+                            operand,
                             resolved,
-                            f"x-gts-ref wildcard constraint '{resolved}' has no registered match",
+                            f"{keyword} constraint '{resolved}' is not registered",
                         )
                     )
-            elif store.get(resolved) is None:
-                errors.append(
-                    XGtsRefValidationError(
-                        ref_path,
-                        ref_pattern,
-                        resolved,
-                        f"x-gts-ref constraint type '{resolved}' is not registered",
-                    )
-                )
-            else:
-                self.referenced_ids.add(resolved)
+                else:
+                    self.referenced_ids.add(resolved)
         return errors
 
     def resolve_ref_pattern(
@@ -448,134 +547,41 @@ class XGtsRefValidator:
 
     def _validate_ref_value(
         self,
+        keyword: str,
         value: str,
-        ref_pattern: str,
+        operand: Any,
         field_path: str,
         selected_type_id: str | None,
     ) -> XGtsRefValidationError | None:
-        """
-        Validate an instance value against its x-gts-ref constraint.
-
-        Args:
-            value: The field value to validate
-            ref_pattern: The x-gts-ref pattern
-            field_path: Path to the field (for error reporting)
-            selected_type_id: Canonical identifier of the selected leaf type
-
-        Returns:
-            XGtsRefValidationError if validation fails, None otherwise
-        """
-        if not isinstance(value, str):
+        """Validate an instance value against a reference constraint, including
+        registry existence for the entity-reference keywords."""
+        try:
+            pattern, spelling = resolve_ref_operand(keyword, operand, selected_type_id)
+        except _OperandError as error:
             return XGtsRefValidationError(
                 field_path,
                 value,
-                ref_pattern,
-                f"Value must be a string, got {type(value).__name__}",
+                operand if isinstance(operand, str) else "",
+                str(error),
             )
 
-        if self.is_self_reference(ref_pattern):
-            if selected_type_id is None:
-                return XGtsRefValidationError(
-                    field_path,
-                    value,
-                    ref_pattern,
-                    "Cannot resolve /$id without a selected GTS Type Schema",
-                )
-            ref_pattern = selected_type_id
-
-        # Validate against GTS pattern
-        return self._validate_gts_pattern(value, ref_pattern, field_path)
-
-    def _validate_ref_pattern(
-        self, ref_pattern: str, field_path: str
-    ) -> XGtsRefValidationError | None:
-        """
-        Validate an x-gts-ref pattern in a schema definition.
-
-        Args:
-            ref_pattern: The x-gts-ref value
-            field_path: Path to the field (for error reporting)
-
-        Returns:
-            XGtsRefValidationError if validation fails, None otherwise
-        """
-        if not isinstance(ref_pattern, str):
-            return XGtsRefValidationError(
-                field_path,
-                ref_pattern,
-                "",
-                f"x-gts-ref value must be a string, got {type(ref_pattern).__name__}",
-            )
-
-        # Case 1: Absolute GTS pattern
-        if ref_pattern.startswith(GTS_PREFIX):
-            return self._validate_gts_id_or_pattern(ref_pattern, field_path)
-
-        if self.is_self_reference(ref_pattern):
-            return None
-
-        return XGtsRefValidationError(
-            field_path,
-            ref_pattern,
-            ref_pattern,
-            f"Invalid x-gts-ref value: '{ref_pattern}' must be a GTS identifier, wildcard, or '{X_GTS_REF_SELF}'",
-        )
-
-    def _validate_gts_id_or_pattern(
-        self, pattern: str, field_path: str
-    ) -> XGtsRefValidationError | None:
-        """Validate a GTS ID or pattern in schema definition."""
-        if pattern == GTS_PREFIX + "*":
-            return None  # Valid wildcard
-
-        if "*" in pattern:
-            # Wildcard pattern - validate prefix
-            prefix = pattern.rstrip("*")
-            if not prefix.startswith(GTS_PREFIX):
-                return XGtsRefValidationError(
-                    field_path,
-                    pattern,
-                    pattern,
-                    f"Invalid GTS wildcard pattern: {pattern}",
-                )
-            return None
-
-        # Specific GTS ID
-        if not GtsID.is_valid(pattern):
-            return XGtsRefValidationError(
-                field_path, pattern, pattern, f"Invalid GTS identifier: {pattern}"
-            )
-        return None
-
-    def _validate_gts_pattern(
-        self, value: str, pattern: str, field_path: str
-    ) -> XGtsRefValidationError | None:
-        """
-        Validate value matches a GTS pattern.
-
-        Args:
-            value: The value to validate
-            pattern: GTS pattern (e.g., "gts.*", "gts.x.core.modules.*")
-            field_path: Path to field (for error reporting)
-
-        Returns:
-            Error if validation fails, None otherwise
-        """
-        # Shared pattern matching (also used by the structural x-gts-ref keyword).
-        reason = _gts_pattern_violation(value, pattern)
+        reason = ref_candidate_violation(keyword, value, pattern, spelling)
         if reason is not None:
-            return XGtsRefValidationError(field_path, value, pattern, reason)
+            return XGtsRefValidationError(field_path, value, spelling, reason)
 
-        # Referenced values use exact registry lookup in presence/full modes.
-        if self.store and self.mode != GtsRefValidationMode.NONE:
-            entity = self.store.get(value)
-            if not entity:
+        # Entity references may additionally require the candidate to be
+        # registered. Pattern references never consult the registry.
+        if (
+            keyword in ENTITY_REF_KEYWORDS
+            and self.store is not None
+            and self.mode != GtsRefValidationMode.NONE
+        ):
+            if self.store.get(value) is None:
                 return XGtsRefValidationError(
                     field_path,
                     value,
-                    pattern,
+                    spelling,
                     f"Referenced entity '{value}' not found in registry",
                 )
             self.referenced_ids.add(value)
-
         return None

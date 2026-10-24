@@ -199,6 +199,17 @@ def _is_subschema(subset: Any, superset: Any) -> bool | None:
     lowered_superset = _lower_root_unevaluated_properties(superset)
     if lowered_subset is None or lowered_superset is None:
         return None
+    # Equal schemas accept equal instance sets, so inclusion holds. This also
+    # covers assertions the delegated engine cannot reason about (e.g. nested
+    # object-valued ``const``/``enum``), where it would otherwise report unknown.
+    # The GTS reference dimension is compared separately (README §9.6.1), so it
+    # is sound for this structural primitive to ignore ``x-gts-*`` here. JSON
+    # spelling distinguishes ``true`` from ``1`` (and ``false`` from ``0``), so
+    # compare canonical JSON rather than Python equality, which conflates them.
+    if _json_key(sanitize(_coerce_bool_schema(lowered_subset))) == _json_key(
+        sanitize(_coerce_bool_schema(lowered_superset))
+    ):
+        return True
     finite_result = _finite_subset(lowered_subset, lowered_superset)
     if finite_result is not None:
         return finite_result
@@ -430,18 +441,39 @@ def dialects_differ(old_schema: Any, new_schema: Any) -> bool:
     )
 
 
+def _inclusion_verdict(subset: Any, superset: Any) -> str:
+    """Structural inclusion folded with the GTS reference-scope dimension.
+
+    The reference scopes are compared separately (README §9.6.1) because the
+    delegated structural engine does not understand the reference keywords. A
+    proved reference exclusion is incompatible; an unknown reference relation is
+    unknown unless the structural dimension already disproves inclusion.
+    """
+    from . import ref_scope_compat
+
+    ref_rel = ref_scope_compat.schema_ref_relation(superset, subset)
+    if ref_rel == ref_scope_compat.EXCLUDED:
+        return INCOMPATIBLE
+    structural = _verdict(_is_subschema(subset, superset))
+    if structural == INCOMPATIBLE:
+        return INCOMPATIBLE
+    if ref_rel == ref_scope_compat.UNKNOWN:
+        return UNKNOWN
+    return structural
+
+
 def check_backward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """new consumers read old data: ``Valid(old) subset-of Valid(new)``."""
     if dialects_differ(old_schema, new_schema):
         return UNKNOWN
-    return _verdict(_is_subschema(old_schema, new_schema))
+    return _inclusion_verdict(old_schema, new_schema)
 
 
 def check_forward_compatibility(old_schema: Any, new_schema: Any) -> str:
     """old consumers read new data: ``Valid(new) subset-of Valid(old)``."""
     if dialects_differ(old_schema, new_schema):
         return UNKNOWN
-    return _verdict(_is_subschema(new_schema, old_schema))
+    return _inclusion_verdict(new_schema, old_schema)
 
 
 def full_verdict(backward: str, forward: str) -> str:

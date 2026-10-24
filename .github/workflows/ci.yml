@@ -162,9 +162,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # Install httprunner first to get pydantic<1.9 constraint
-          pip install httprunner pytest requests
-          # Then install gts (will use already-installed pydantic v1)
+          # The gts-spec test runner requires pytest >= 9 (see
+          # .gts-spec/tests/pytest.ini). httprunner pins incompatible deps
+          # (pytest < 8, pydantic < 1.9), so install it with --no-deps and take
+          # the rest from the spec's requirements, mirroring the Makefile's
+          # py-env target. Installing gts then pins pydantic to v2.
+          grep -viE '^[[:space:]]*httprunner([^A-Za-z0-9_.-]|$)' \
+            .gts-spec/tests/requirements.txt > /tmp/spec-requirements.txt
+          pip install -r /tmp/spec-requirements.txt
+          pip install --no-deps 'httprunner>=4,<5'
           pip install -e ./gts
 
       - name: Run e2e tests

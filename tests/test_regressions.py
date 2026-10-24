@@ -31,21 +31,28 @@ class TestXGtsRefCombinators:
 
         assert errors == []
 
-    def test_x_gts_ref_only_one_of_still_requires_one_match(self):
+    def test_ref_only_one_of_still_requires_one_match(self):
         schema = {
             "oneOf": [
-                {"x-gts-ref": "gts.x.test._.first.v1~"},
-                {"x-gts-ref": "gts.x.test._.second.v1~"},
+                {"x-gts-instance-ref": "gts.x.test._.first.v1~"},
+                {"x-gts-instance-ref": "gts.x.test._.second.v1~"},
             ]
         }
 
         valid = "gts.x.test._.first.v1~x.test._.item.v1"
         invalid = "gts.x.test._.other.v1~x.test._.item.v1"
 
-        assert XGtsRefValidator(inherited_dialect="draft-07").validate_instance(valid, schema) == []
+        assert (
+            XGtsRefValidator(inherited_dialect="draft-07").validate_instance(
+                valid, schema
+            )
+            == []
+        )
         assert [
             error.reason
-            for error in XGtsRefValidator(inherited_dialect="draft-07").validate_instance(invalid, schema)
+            for error in XGtsRefValidator(
+                inherited_dialect="draft-07"
+            ).validate_instance(invalid, schema)
         ] == ["oneOf: no branch matched"]
 
 

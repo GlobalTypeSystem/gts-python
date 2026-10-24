@@ -907,7 +907,10 @@ def test_operational_failure_in_wildcard_target_fails_validation(monkeypatch):
         {
             "type": "object",
             "properties": {
-                "ref": {"type": "string", "x-gts-ref": "gts.x.re2._.target.v1~*"}
+                "ref": {
+                    "type": "string",
+                    "x-gts-instance-ref": "gts.x.re2._.target.v1~*",
+                }
             },
         },
         # Draft-07's meta-schema has no patterns, so the failure first occurs

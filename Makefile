@@ -54,6 +54,21 @@ endif
 
 force-py-env:
 
+# Recreate the venv when the bootstrap interpreter's Python version no longer
+# matches the existing venv (e.g. the system python3 was upgraded, or the venv
+# was created by a different python3). Silently reusing a venv built with an
+# incompatible interpreter causes confusing failures: google-re2 ships wheels
+# only for 3.10-3.14, so a stale 3.9 venv tries to build it from source and
+# fails on missing RE2/Abseil headers.
+PY_ENV_VERSION := $(shell "$(PY_ENV_PYTHON)" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
+PY_BOOTSTRAP_VERSION := $(shell $(PYTHON_BOOTSTRAP) -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)
+ifneq ($(PY_ENV_VERSION),)
+ifneq ($(PY_ENV_VERSION),$(PY_BOOTSTRAP_VERSION))
+$(PY_ENV_PYTHON): force-py-env
+$(PY_ENV_STAMP): force-py-env
+endif
+endif
+
 $(PY_ENV_STAMP): $(PY_ENV_PYTHON) gts/pyproject.toml $(GTS_SPEC_DIR)/tests/requirements.txt requirements.txt Makefile
 	@echo "Creating/updating Python virtual environment in $(PY_ENV_DIR)..."
 	@rm -f "$@"

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path as SysPath
 from typing import Any
 
+from . import gts_id_pattern
 from ._naming import GTS_PREFIX, GTS_URI_PREFIX, looks_like_gts, strip_scheme
 from .entities import DEFAULT_GTS_CONFIG, GtsConfig, GtsEntity
 from .files_reader import GtsFileReader
@@ -819,20 +820,14 @@ class GtsOps:
             )
 
     def match_id_pattern(self, candidate: str, pattern: str) -> GtsIdMatchResult:
-        try:
-            # If candidate contains '*', validate it as a wildcard pattern
-            # This catches malformed wildcards like 'a*' (wildcard not on token boundary)
-            if "*" in candidate:
-                # Validate candidate as a wildcard pattern first
-                _ = GtsWildcard(candidate)
-            c = GtsID(candidate)
-            p = GtsWildcard(pattern)
-            match = c.wildcard_match(p)
-            return GtsIdMatchResult(candidate=candidate, pattern=pattern, match=match)
-        except Exception as e:  # noqa: BLE001 - converted to a result object at API boundary
-            return GtsIdMatchResult(
-                candidate=candidate, pattern=pattern, match=False, error=str(e)
-            )
+        # README §10 / OP#4: a concrete candidate matches when it is in
+        # M(pattern); a wildcard candidate matches when the pattern covers its
+        # whole selection set. Both sides use parsed chain boundaries and the
+        # minor-version rules (never lexical startsWith).
+        matched, error = gts_id_pattern.match(candidate, pattern)
+        return GtsIdMatchResult(
+            candidate=candidate, pattern=pattern, match=matched, error=error or ""
+        )
 
     def uuid(self, gts_id: str) -> GtsUuidResult:
         g = GtsID(gts_id)
