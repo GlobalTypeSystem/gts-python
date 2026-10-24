@@ -2,7 +2,7 @@
 
 Python helpers and a reference HTTP service for the [Global Type System (GTS)](https://github.com/globaltypesystem/gts-spec). The package supports GTS identifier parsing, JSON Schema-backed validation, schema compatibility and derivation checks, traits, casting, queries, file loading, a CLI, and a FastAPI application.
 
-The package targets GTS specification 0.15.0 and requires Python 3.9 or later. `google-re2` ships wheels for CPython 3.10-3.14; on Python 3.9 pip builds it from source, which needs a C++17 compiler and the RE2 and Abseil development headers.
+The package targets GTS specification 0.17.0 and requires Python 3.9 or later. `google-re2` ships wheels for CPython 3.10-3.14; on Python 3.9 pip builds it from source, which needs a C++17 compiler and the RE2 and Abseil development headers.
 
 ## Installation
 
@@ -166,8 +166,8 @@ TypeSpec (`.tsp`) inputs must be compiled to JSON Schema before loading.
 | `get(entity_id)` | Return `GtsEntity` or `None`. |
 | `items()` | Return an iterator over in-memory `(entity_id, entity)` pairs. |
 | `get_schema_content(type_id)` | Return a schema dictionary or raise `KeyError`. |
-| `validate_schema_basic(type_id)` | Check `$ref` format, `x-gts-ref` declarations, and GTS keyword placement. |
-| `validate_schema(type_id)` | Run full JSON Schema, derivation, final/abstract, x-gts-ref, and trait validation. |
+| `validate_schema_basic(type_id)` | Check `$ref` format, GTS reference declarations, and GTS keyword placement. |
+| `validate_schema(type_id)` | Run full JSON Schema, derivation, final/abstract, reference, and trait validation. |
 | `validate_instance(gts_id)` | Validate a well-known or UUID-addressed instance against its type schema. |
 | `is_minor_compatible(old_schema_id, new_schema_id)` | Return compatibility verdicts for two registered schemas. |
 | `cast(from_id, target_schema_id)` | Cast a registered **instance** to a target schema. |
@@ -215,11 +215,15 @@ The library validates schemas with the dialect named by `$schema`; if absent, it
 
 During instance validation, GTS references are resolved with `referencing.Registry`. Draft 2019-09 and Draft 2020-12 `$ref` sibling constraints are preserved, so a sibling such as `minLength` is enforced.
 
-### `x-gts-ref`
+### GTS references
 
-`x-gts-ref` restricts a string value to a GTS ID or pattern. It accepts an absolute `gts.` pattern or a JSON Pointer beginning with `/` that resolves to one. If a store is present, the referenced entity must be registered.
+GTS 0.17 replaces the former `x-gts-ref` with kind-specific entity references `x-gts-type-ref` and `x-gts-instance-ref`, and 0.16 adds `x-gts-pattern-ref`:
 
-`x-gts-ref` can appear in `oneOf`, `anyOf`, and `allOf`. For x-gts-ref-only combinator branches, GTS evaluates the x-gts-ref constraints as the combinator condition. For ordinary or mixed JSON Schema branches, normal JSON Schema structural matching determines which branch’s x-gts-ref constraints are applied.
+- `x-gts-type-ref`: restricts a string value to a GTS Type Identifier.
+- `x-gts-instance-ref`: restricts a string value to a GTS Instance Identifier.
+- `x-gts-pattern-ref`: restricts a string value to a GTS identifier pattern covered by the operand (`M(value) ⊆ M(operand)`), evaluated without consulting the registry.
+
+The former kind-blind `x-gts-ref` keyword was removed in GTS 0.16 and is rejected on schema validation like any unknown `x-gts-*` keyword.
 
 ### `x-gts-final` and `x-gts-abstract`
 

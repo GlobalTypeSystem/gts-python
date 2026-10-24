@@ -2,9 +2,9 @@
 
 # GTS Python Library
 
-A minimal, idiomatic Python library for working with **GTS** ([Global Type System](https://github.com/gts-spec/gts-spec)) identifiers and JSON/JSON Schema artifacts.
+A minimal, idiomatic Python library for working with **GTS** ([Global Type System](https://github.com/GlobalTypeSystem/gts-spec)) identifiers and JSON/JSON Schema artifacts.
 
-Current supported GTS spec version: `0.15.0`. Conformance CI pins the released gts-spec `v0.15.0` in [`.gts-spec-version`](.gts-spec-version) and the `.gts-spec` submodule; run `make update-spec` to check the pinned release out. The 0.15 breaking change is the [safe regular-expression profile](gts/README.md#regular-expressions).
+Targets gts-spec [v0.17.0](https://github.com/GlobalTypeSystem/gts-spec/releases/tag/v0.17.0) — recorded in [`.gts-spec-version`](.gts-spec-version) and pinned by the `.gts-spec` submodule. Run `make update-spec` to check the pinned release out.
 
 ## Roadmap
 
@@ -29,14 +29,16 @@ Featureset:
 
 See details in [gts/README.md](gts/README.md)
 
-Other GTS spec [Reference Implementation](https://github.com/globaltypesystem/gts-spec/blob/main/README.md#9-reference-implementation-recommendations) recommended features support:
+Other GTS spec [Reference Implementation](https://github.com/GlobalTypeSystem/gts-spec/blob/main/README.md#9-reference-implementation-recommendations) recommended features support:
 
 - [x] **In-memory entities registry** - simple GTS entities registry with optional GTS references validation on entity registration
 - [x] **CLI** - command-line interface for all GTS operations
 - [x] **Web server** - a non-production web-server with REST API for the operations processing and testing
-- [x] **x-gts-ref support** - to support special GTS entity reference annotation in schemas
+- [x] **x-gts-type-ref / x-gts-instance-ref** - kind-specific GTS entity references in schemas (spec §9.6.1)
+- [x] **x-gts-pattern-ref** - pattern-valued string fields: GTS identifier pattern syntax and coverage by an operand, independent of the registry (spec §9.6.2, §10)
+- [x] **x-gts-final / x-gts-abstract** - GTS Type Schema modifiers controlling inheritance and instantiation
 - [x] **YAML support** - to support YAML files (*.yml, *.yaml) as input files
-- [x] **UUID for instances** - to support UUID as ID in JSON instances
+- [x] **UUID for instances** - to support UUID as ID in JSON instances (anonymous instances)
 - [ ] **TypeSpec support** - direct support for [typespec.io](https://typespec.io/) files (*.tsp) input files
 
 Technical Backlog:
@@ -49,7 +51,7 @@ Technical Backlog:
 
 ## Installation
 
-GTS requires Python 3.9 or later.
+GTS requires Python 3.9 or later. `google-re2` ships wheels for CPython 3.10–3.14; on Python 3.9 pip builds it from source, which needs a C++17 compiler and the RE2 and Abseil development headers.
 
 ### Local development
 
@@ -82,39 +84,130 @@ pip install gts
 ### CLI
 
 ```bash
-gts <command> <args>
+# Basic operations
+gts validate-id --gts-id 'gts.example.demo._.event.v1~'
+gts parse-id --gts-id 'gts.example.demo._.event.v1~'
+gts match-id-pattern --candidate 'gts.example.demo._.event.v1~' --pattern 'gts.example.*'
+gts uuid --gts-id 'gts.example.demo._.event.v1~'
 
-# see available commands
+# Operations with loaded entities
+gts --path ./examples validate-instance --gts-id 'gts.example.demo._.event.v1~example.demo._.created.v1'
+gts --path ./examples validate-type-schema --gts-id 'gts.example.demo._.event.v1.1~'
+gts --path ./examples validate-entity --gts-id 'gts.example.demo._.event.v1~'
+gts --path ./examples resolve-relationships --gts-id 'gts.example.demo._.event.v1~'
+gts --path ./examples compatibility --old-schema-id 'gts.example.demo._.event.v1.0~' --new-schema-id 'gts.example.demo._.event.v1.1~'
+gts --path ./examples cast --from-id 'gts.example.demo._.event.v1~example.demo._.created.v1' --to-schema-id 'gts.example.demo._.event.v1.1~'
+gts --path ./examples query --expr 'gts.example.*' --limit 10
+gts --path ./examples attr --gts-with-path 'gts.example.demo._.event.v1~@properties.name'
+gts --path ./examples list --limit 100
+
+# See all commands and options
 gts --help
 ```
 
 ### Library
 
-See [gts/README.md](gts/README.md)
+`GtsOps` provides the high-level in-memory API:
+
+```python
+from gts.ops import GtsOps
+
+ops = GtsOps()
+
+# OP#1 - ID Validation
+result = ops.validate_id("gts.example.demo._.event.v1~")
+assert result.valid
+
+# OP#2 - ID Extraction
+extracted = ops.extract_id({"id": "gts.example.demo._.event.v1.0", "name": "Event"})
+print(extracted.id)
+
+# OP#3 - ID Parsing
+parsed = ops.parse_id("gts.example.demo._.event.v1~")
+for seg in parsed.segments:
+    print(seg.vendor, seg.package, seg.type, seg.ver_major)
+
+# OP#4 - Pattern Matching
+match = ops.match_id_pattern("gts.example.demo._.event.v1.0", "gts.example.*")
+assert match.match
+
+# OP#5 - ID to UUID Mapping
+uuid_res = ops.uuid("gts.example.demo._.event.v1~")
+print(uuid_res.uuid)
+```
+
+See [gts/README.md](gts/README.md) for full library documentation including schema validation, store operations, query execution, traits, and casting.
 
 ### Web server
 
-The web server is a non-production web-server with REST API for the operations processing and testing. It implements reference API for gts-spec [tests](https://github.com/GlobalTypeSystem/gts-spec/tree/main/tests)
-
+The web server is a non-production web server with REST API for operations processing and testing. It implements the reference API for [gts-spec tests](https://github.com/GlobalTypeSystem/gts-spec/tree/main/tests).
 
 ```bash
-# start the web server, default location is http://127.0.0.1:8000
-gts serve
+# Start the web server (default: http://127.0.0.1:8000)
+gts server
 
-# start the web server on different port
+# Start the web server on a different port
 gts server --port 8081
 
-# pre-populate server with the JSON instancens and schemas from the gts-spec tests
-gts server --path {PATH_TO_JSON_FILES}
+# Pre-populate server with entities from files or directories
+gts --path {PATH_TO_JSON_FILES} server
 
-# Generate the OpenAPI schema
-curl -s http://127.0.0.1:8000/openapi.json | jq > ./gts/openapi.json
+# Allow re-registering an entity with different content (default: reject with 409 Conflict)
+gts server --allow-entity-updates
 
-# See the schema
+# Generate the OpenAPI specification
+gts openapi-spec --out openapi.json
+
+# Or fetch from running server
+curl -s http://127.0.0.1:8000/openapi.json | jq > ./openapi.json
 curl -s http://127.0.0.1:8000/openapi.json | jq | less -S
 ```
 
-### Testing
+#### API Endpoints
+
+##### Entity Management
+- `GET /entities` - List registered entities (`limit` query parameter, 1–1000)
+- `GET /entities/{gts_id}` - Retrieve a specific entity
+- `POST /entities` - Register a single entity (optional `?validate=true`)
+- `POST /entities/bulk` - Register multiple entities
+- `POST /type-schemas` - Register a batch of GTS Type Schemas (each `type_id` derived from its embedded `$id`)
+
+##### GTS Operations
+- `GET /validate-id?gts_id=<id>` - Validate GTS ID (OP#1)
+- `POST /extract-id` - Extract GTS ID from JSON (OP#2)
+- `GET /parse-id?gts_id=<id>` - Parse GTS ID (OP#3)
+- `GET /match-id-pattern?candidate=<id>&pattern=<pat>` - Match pattern (OP#4)
+- `GET /uuid?gts_id=<id>` - Generate UUID (OP#5)
+- `POST /validate-instance` - Validate registered instance (OP#6)
+- `POST /validate-json` - Validate transient instance or Type Schema JSON without registering (OP#6)
+- `POST /validate-json/{gts_type}` - Validate transient instance JSON against explicit type (OP#6)
+- `GET /resolve-relationships?gts_id=<id>` - Resolve relationships and detect broken references (OP#7)
+- `GET /compatibility?old_type_id=<id>&new_type_id=<id>` - Check Type Schema evolution compatibility (OP#8)
+- `POST /cast` - Cast instance to target schema (OP#9)
+- `GET /query?expr=<expr>&limit=<limit>` - Query entities (OP#10)
+- `GET /attr?gts_with_path=<id@path>` - Retrieve attribute value (OP#11)
+- `POST /validate-type-schema` - Validate derived Type Schema against base chain (OP#12)
+- `POST /validate-entity` - Validate entity by GTS ID (OP#12/OP#13)
+
+## Development
+
+Common development tasks are wrapped in the `Makefile`:
+
+```bash
+make py-env      # create/update virtualenv and install dependencies
+make install     # install gts in editable mode
+make build       # build source and wheel distributions into dist/
+make check       # run all quality checks (fmt, lint, mypy, test, e2e)
+make test        # run unit tests
+make coverage    # measure code coverage
+make fmt         # check code formatting (ruff)
+make dev-fmt     # auto-format code (ruff)
+make lint        # run linter (ruff)
+make mypy        # run type checker
+make security    # check dependencies for vulnerabilities (pip-audit)
+```
+
+## Testing
 
 You can test the gts-python library by utilizing the shared test suite from the [gts-spec](https://github.com/GlobalTypeSystem/gts-spec) specification and executing the tests against the web server.
 
